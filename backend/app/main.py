@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from typing import Optional
+import requests
 
 from fastapi import APIRouter, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,6 +65,51 @@ def notify(user_id: str, title: str, body: str, link: str = "", kind: str = "inf
     store.col("notifications").insert_one(
         {"_id": nid("n_"), "userId": user_id, "title": title, "body": body,
          "link": link, "kind": kind, "read": False, "createdAt": now_iso()})
+
+
+def _env_admin_credentials() -> tuple[str, str, str]:
+    email = (os.getenv("ADMIN_EMAIL") or "").strip().lower()
+    password = (os.getenv("ADMIN_PASSWORD") or "").strip()
+    name = (os.getenv("ADMIN_NAME") or "Platform Admin").strip() or "Platform Admin"
+    return email, password, name
+
+
+def _sync_admin_from_env() -> dict | None:
+    email, password, name = _env_admin_credentials()
+    if not email:
+        return None
+    users = store.col("users")
+    u = users.find_one({"role": "admin"}) or users.find_one({"email": email})
+    if u:
+        updates = {
+            "name": name,
+            "email": email,
+            "passwordHash": A.hash_password(password) if password else u.get("passwordHash", ""),
+            "role": "admin",
+            "avatar": "AD",
+            "color": "#64748b",
+        }
+        if "company" in u:
+            updates["company"] = u.get("company")
+        if "skills" in u:
+            updates["skills"] = u.get("skills")
+        if "expertise" in u:
+            updates["expertise"] = u.get("expertise")
+        users.update_one({"_id": u["_id"]}, {"$set": updates})
+        return users.find_one({"_id": u["_id"]})
+
+    u = {
+        "_id": nid("u_"),
+        "name": name,
+        "email": email,
+        "passwordHash": A.hash_password(password) if password else "",
+        "role": "admin",
+        "avatar": "AD",
+        "color": "#64748b",
+        "createdAt": now_iso(),
+    }
+    users.insert_one(u)
+    return u
 
 
                                                                            
@@ -131,6 +177,102 @@ def _score_internship_for_student(it: dict, stu: dict, past_apps: list[dict]) ->
     return max(0, min(100, score)), reasons
 
 def _score_applicant(a: dict, it: dict) -> tuple[int, list[str]]:
+    def _mentor_overlap(mentor: dict, internship: dict) -> set[str]:
+        mentor_skills = _norm_skills(mentor.get("expertise")) | _norm_skills(mentor.get("skills"))
+        internship_skills = _norm_skills(internship.get("skills"))
+        return mentor_skills & internship_skills
+
+    def _score_mentor_for_internship(mentor: dict, internship: dict) -> tuple[int, list[str]]:
+        reasons: list[str] = []
+        overlap = _mentor_overlap(mentor, internship)
+        need = _norm_skills(internship.get("skills"))
+        score = 0
+        if need:
+            if overlap:
+                ratio = len(overlap) / len(need)
+                score += min(60, round(ratio * 60))
+                reasons.append(f"{len(overlap)}/{len(need)} skill overlap")
+            else:
+                score += 10
+                reasons.append("New domain match")
+        else:
+            score += 25
+
+        if mentor.get("verified"):
+            score += 10
+            reasons.append("Verified mentor")
+        if mentor.get("experience"):
+            score += 5
+            reasons.append("Industry experience")
+        if mentor.get("location") and internship.get("location"):
+            mentor_loc = str(mentor.get("location", "")).lower()
+            internship_loc = str(internship.get("location", "")).lower()
+            if mentor_loc and (mentor_loc in internship_loc or internship_loc in mentor_loc or "remote" in internship_loc.lower()):
+                score += 10
+                reasons.append("Location fit")
+
+        active_load = int(store.col("allocations").count_documents({"mentorId": mentor.get("_id"), "status": "active"}))
+        cap = int((mentor.get("maxMentees") or 10) or 10)
+        spare = max(0, cap - active_load)
+        if spare > 0:
+            score += min(15, spare * 3)
+            reasons.append(f"{spare} mentee slots available")
+
+        if mentor.get("bio"):
+            score += 5
+            reasons.append("Strong mentoring profile")
+
+        if os.getenv("GEMINI_API_KEY"):
+            try:
+                txt = (
+                    "You are scoring a mentor for an internship. Return only valid JSON with keys score and reasons. "
+                    f"Mentor profile: name={mentor.get('name')}, expertise={mentor.get('expertise')}, skills={mentor.get('skills')}, bio={mentor.get('bio')}, location={mentor.get('location')}. "
+                    f"Internship: title={internship.get('title')}, skills={internship.get('skills')}, domain={internship.get('domain')}, mode={internship.get('mode')}, location={internship.get('location')}. "
+                    "Score 0-100 based on skill fit and mentoring fit. Keep reasons concise."
+                )
+                resp = requests.post(
+                    f"https://generativelanguage.googleapis.com/v1beta/models/{os.getenv('GEMINI_MODEL', 'gemini-2.5-flash-lite')}:generateContent?key={os.getenv('GEMINI_API_KEY')}",
+                    json={"contents": [{"parts": [{"text": txt}]}], "generationConfig": {"responseMimeType": "application/json", "temperature": 0.1}},
+                    timeout=30,
+                )
+                if resp.status_code < 400:
+                    data = resp.json()
+                    text = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+                    if text:
+                        import json as _json
+                        parsed = _json.loads(text.strip().strip("```json").strip("```"))
+                        if isinstance(parsed, dict):
+                            ai_score = int(parsed.get("score", score))
+                            score = max(0, min(100, ai_score))
+                            ai_re = parsed.get("reasons") or []
+                            if isinstance(ai_re, list) and ai_re:
+                                reasons = [str(r) for r in ai_re[:3]]
+            except Exception:
+                pass
+
+        return max(0, min(100, score)), reasons[:4]
+
+    @api.get("/match/mentors")
+    def rank_mentors(req: Request, internshipId: str = Query("")):
+        u = me(req, ["company", "admin"])
+        it = store.col("internships").find_one({"_id": internshipId}) or {}
+        if u["role"] == "company" and it.get("companyId") != u["_id"]:
+            raise HTTPException(403, "Not your role")
+
+        out = []
+        for m in store.col("users").find({"role": "mentor"}):
+            if m.get("suspended"):
+                continue
+            score, reasons = _score_mentor_for_internship(m, it)
+            out.append({
+                "mentor": pub(m),
+                "score": score,
+                "reasons": reasons,
+                "activeMentees": int(store.col("allocations").count_documents({"mentorId": m.get("_id"), "status": "active"})),
+                "capacity": int((m.get("maxMentees") or 10) or 10),
+            })
+        out.sort(key=lambda r: r["score"], reverse=True)
+        return out
     st = a.get("student") or {}
     mine = _norm_skills(st.get("skills"))
     need = _norm_skills(it.get("skills"))
@@ -317,10 +459,23 @@ def evaluation_eligibility(al: dict) -> dict:
     return {"eligible": not reasons, "reasons": reasons, "summary": s}
 
 
+def _latest_student_resume(student_id: str) -> dict:
+    if not student_id:
+        return {}
+    rows = store.col("resumes").find({"userId": student_id}, sort=[("createdAt", -1)], limit=1)
+    return rows[0] if rows else {}
+
+
 def enrich_application(a: dict) -> dict:
     a = dict(a)
     a["student"] = pub(store.col("users").find_one({"_id": a.get("studentId")}))
     a["internship"] = store.col("internships").find_one({"_id": a.get("internshipId")})
+    if not a.get("resume"):
+        a["resume"] = _latest_student_resume(a.get("studentId"))
+    if not a.get("resumeName") and a.get("resume"):
+        a["resumeName"] = a.get("resume", {}).get("filename")
+    if not a.get("resumeUrl") and a.get("resume"):
+        a["resumeUrl"] = a.get("resume", {}).get("url")
     return a
 
 
@@ -496,12 +651,25 @@ class UserPatch(BaseModel):
     degree: Optional[str] = None
     year: Optional[str] = None
     cgpa: Optional[str] = None
+    education: Optional[list[str]] = None
+    projects: Optional[list[str]] = None
+    experience: Optional[list[str]] = None
+    certifications: Optional[list[str]] = None
+    interests: Optional[list[str]] = None
+    preferredRoles: Optional[list[str]] = None
+    resumeName: Optional[str] = None
+    resumeUrl: Optional[str] = None
     profileComplete: Optional[bool] = None
     company: Optional[dict] = None
 
 
 class MessageIn(BaseModel):
     text: str
+
+
+class StartThreadIn(BaseModel):
+    recipientId: str
+    subject: str = "Direct message"
 
 
                                                                            
@@ -514,8 +682,8 @@ def health():
 @api.post("/auth/register")
 def register(body: RegisterIn):
     role = body.role.strip().lower()
-    if role not in ("student", "company"):
-        raise HTTPException(400, "Public registration is open for Student and Company roles only")
+    if role not in ("student", "company", "mentor"):
+        raise HTTPException(400, "Public registration is open for Student, Company, and Mentor roles only")
     email = body.email.strip().lower()
     if store.col("users").find_one({"email": email}):
         raise HTTPException(409, "An account with this email already exists")
@@ -526,7 +694,9 @@ def register(body: RegisterIn):
             "passwordHash": A.hash_password(body.password), "role": role,
             "avatar": "".join(p[0] for p in body.name.strip().split()[:2]).upper() or "IN",
             "color": "#7b39fc", "profileComplete": False,
-            "skills": [] if role == "student" else None,
+            "skills": [] if role in ("student", "mentor") else None,
+            "expertise": [] if role == "mentor" else None,
+            "organisation": "InterNova Mentor Network" if role == "mentor" else None,
             "company": {"name": "", "industry": "", "size": "", "location": "",
                         "website": "", "about": ""} if role == "company" else None,
             "createdAt": now_iso()}
@@ -540,7 +710,18 @@ def register(body: RegisterIn):
 
 @api.post("/auth/login")
 def login(body: LoginIn):
-    u = store.col("users").find_one({"email": body.email.strip().lower()})
+    email = body.email.strip().lower()
+    env_email, env_password, _ = _env_admin_credentials()
+    if email == env_email and env_password and body.password == env_password:
+        u = _sync_admin_from_env()
+        if not u:
+            raise HTTPException(401, "Invalid email or password")
+        tmp, otp = A.issue_otp(u["_id"])
+        E.send_template(u["email"], E.otp(u["name"], otp), "otp", u["_id"])
+        return {"otpRequired": True, "tempToken": tmp,
+                "email": u["email"], **({"devOtp": otp} if A.DEV_OTP else {})}
+
+    u = store.col("users").find_one({"email": email})
     if not u or not A.verify_password(body.password, u.get("passwordHash", "")):
         raise HTTPException(401, "Invalid email or password")
     tmp, otp = A.issue_otp(u["_id"])
@@ -618,12 +799,29 @@ def auth_me(req: Request):
                                                                             
 @api.get("/internships")
 def list_internships(q: str = "", domain: str = "", mode: str = "",
-                     location: str = "", company: str = ""):
+                     location: str = "", company: str = "", req: Request = None):
+    user = None
+    if req is not None:
+        try:
+            user = me(req)
+        except HTTPException:
+            user = None
     rows = store.col("internships").find()
     ql = q.lower()
     out = []
     for it in rows:
-        if it.get("status") == "closed":
+        status = str(it.get("status") or "open")
+        if status == "closed":
+            continue
+        if status == "pending_approval" and user is not None:
+            if user.get("role") != "admin" and not (user.get("role") == "company" and it.get("companyId") == user.get("_id")):
+                continue
+        elif status == "pending_approval":
+            continue
+        if status == "rejected" and user is not None:
+            if user.get("role") != "admin" and not (user.get("role") == "company" and it.get("companyId") == user.get("_id")):
+                continue
+        elif status == "rejected":
             continue
         blob = f"{it.get('title','')} {it.get('companyName','')} {it.get('domain','')} {' '.join(it.get('skills',[]))}".lower()
         if ql and ql not in blob:
@@ -644,9 +842,17 @@ def list_internships(q: str = "", domain: str = "", mode: str = "",
 
 
 @api.get("/internships/{iid}")
-def get_internship(iid: str):
+def get_internship(iid: str, req: Request = None):
     it = store.col("internships").find_one({"_id": iid})
     if not it:
+        raise HTTPException(404, "Internship not found")
+    user = None
+    if req is not None:
+        try:
+            user = me(req)
+        except HTTPException:
+            user = None
+    if str(it.get("status") or "open") == "pending_approval" and (not user or (user.get("role") != "admin" and not (user.get("role") == "company" and it.get("companyId") == user.get("_id")))):
         raise HTTPException(404, "Internship not found")
     it = dict(it)
     it["applicants"] = store.col("applications").count_documents({"internshipId": iid})
@@ -659,12 +865,13 @@ def create_internship(body: InternshipIn, req: Request):
     co = (u.get("company") or {}).get("name") or u.get("name")
     doc = body.model_dump()
     doc.update({"_id": nid("int_"), "companyId": u["_id"], "companyName": co,
-                "status": "open", "postedAt": date.today().isoformat(),
+                "status": "pending_approval", "approvalNote": "",
+                "postedAt": date.today().isoformat(),
                 "createdAt": now_iso()})
     store.col("internships").insert_one(doc)
     for admin in store.col("users").find({"role": "admin"}):
-        notify(admin["_id"], "New internship posted",
-               f"{co} posted “{doc['title']}”.", "/dashboard/admin?tab=internships")
+        notify(admin["_id"], "New internship awaiting approval",
+               f"{co} posted “{doc['title']}” and it is awaiting admin review.", "/dashboard/admin?tab=internships")
     return doc
 
 
@@ -678,10 +885,33 @@ def update_internship(iid: str, patch: dict, req: Request):
         raise HTTPException(403, "Not your internship")
     allowed = {"title", "domain", "skills", "mode", "location", "duration",
                "durationMonths", "stipend", "openings", "startDate", "deadline",
-               "description", "responsibilities", "status"}
-    store.col("internships").update_one({"_id": iid},
-                                        {"$set": {k: v for k, v in patch.items() if k in allowed}})
-    return store.col("internships").find_one({"_id": iid})
+               "description", "responsibilities", "status", "approvalNote"}
+    updates = {k: v for k, v in patch.items() if k in allowed}
+    if u["role"] == "company" and "status" in updates:
+        updates.pop("status")
+    if u["role"] == "admin" and updates.get("status") in ("open", "rejected", "closed"):
+        if updates.get("status") == "open":
+            updates["approvalNote"] = updates.get("approvalNote") or "Approved by admin"
+        elif updates.get("status") == "rejected":
+            updates["approvalNote"] = updates.get("approvalNote") or "Rejected by admin"
+        elif updates.get("status") == "closed":
+            updates["approvalNote"] = updates.get("approvalNote") or "Removed by admin from public listings"
+    if "status" in updates and updates["status"] == "open":
+        updates["postedAt"] = updates.get("postedAt") or date.today().isoformat()
+    store.col("internships").update_one({"_id": iid}, {"$set": updates})
+    doc = store.col("internships").find_one({"_id": iid})
+    if u["role"] == "admin" and updates.get("status") in ("open", "rejected", "closed"):
+        company = store.col("users").find_one({"_id": it.get("companyId")})
+        if company:
+            if updates.get("status") == "closed":
+                notify(company["_id"], "Internship removed",
+                       f"Your internship “{doc.get('title', 'Role')}” was removed from the public website by admin.",
+                       "/dashboard/company?tab=internships")
+            else:
+                notify(company["_id"], "Internship approval result",
+                       f"Your internship “{doc.get('title', 'Role')}” was {updates['status'] == 'open' and 'approved' or 'rejected'} by admin.",
+                       "/dashboard/company?tab=internships")
+    return doc
 
 
                                                                             
@@ -693,8 +923,12 @@ def apply(body: ApplicationIn, req: Request):
         raise HTTPException(400, "This internship is no longer accepting applications")
     if store.col("applications").find_one({"studentId": u["_id"], "internshipId": body.internshipId}):
         raise HTTPException(409, "You have already applied to this internship")
+    latest_resume = _latest_student_resume(u["_id"])
     doc = {"_id": nid("ap_"), "studentId": u["_id"], "internshipId": body.internshipId,
-           "status": "applied", "coverLetter": body.coverLetter,
+           "status": "applied", "coverLetter": body.coverLetter or "",
+           "resumeName": (latest_resume or {}).get("filename") or u.get("resumeName") or "",
+           "resumeUrl": (latest_resume or {}).get("url") or u.get("resumeUrl") or "",
+           "resume": latest_resume or {},
            "appliedAt": now_iso(), "updatedAt": now_iso(),
            "timeline": [{"s": "applied", "at": date.today().isoformat()}]}
     store.col("applications").insert_one(doc)
@@ -737,32 +971,37 @@ def update_application(aid: str, body: StatusIn, req: Request):
     if u["role"] == "company" and (it or {}).get("companyId") != u["_id"]:
         raise HTTPException(403, "Not your application")
     status = body.status.strip().lower()
-    if status not in ("applied", "under_review", "shortlisted", "selected", "rejected", "allocated"):
+    if status not in ("applied", "under_review", "shortlisted", "selected", "accepted", "rejected", "allocated"):
         raise HTTPException(400, "Invalid status")
     timeline = a.get("timeline", []) + [{"s": status, "at": date.today().isoformat()}]
     store.col("applications").update_one({"_id": aid}, {"$set": {"status": status, "timeline": timeline, "updatedAt": now_iso()}})
     labels = {"under_review": "under review", "shortlisted": "shortlisted",
-              "selected": "selected", "rejected": "rejected", "allocated": "allocated"}
+              "selected": "selected", "accepted": "accepted", "rejected": "rejected", "allocated": "allocated"}
     notify(a["studentId"], f"Application {labels.get(status, status)}",
            f"Your application for {(it or {}).get('title','the internship')} is now {labels.get(status, status)}.",
            "/dashboard/student?tab=applications",
-           "success" if status in ("shortlisted", "selected", "allocated") else "info")
+           "success" if status in ("shortlisted", "selected", "accepted", "allocated") else "info")
     st = store.col("users").find_one({"_id": a["studentId"]}) or {}
     if st.get("email"):
         E.send_template(st["email"], E.app_status(st.get("name", "there"),
                         (it or {}).get("title", "your internship"), status),
                         "app_status", a["studentId"])
     allocation = None
-    if status == "selected":
+    if status in ("selected", "accepted"):
                                                                     
         mentor = store.col("users").find_one({"role": "mentor"})
         allocation = {"_id": nid("al_"), "studentId": a["studentId"],
                       "internshipId": a["internshipId"], "companyId": (it or {}).get("companyId"),
-                      "mentorId": mentor["_id"] if mentor else "", "status": "allocated",
+                      "mentorId": mentor["_id"] if mentor else "", "status": "active",
                       "startDate": (it or {}).get("startDate", ""), "endDate": "",
                       "progress": 0, "createdAt": now_iso(), "updatedAt": now_iso()}
         store.col("allocations").insert_one(allocation)
-        store.col("applications").update_one({"_id": aid}, {"$set": {"status": "allocated"}})
+        next_status = "allocated" if mentor else "accepted"
+        next_timeline = timeline + ([{"s": "allocated", "at": date.today().isoformat()}] if mentor else [])
+        store.col("applications").update_one(
+            {"_id": aid},
+            {"$set": {"status": next_status, "timeline": next_timeline, "updatedAt": now_iso()}},
+        )
         notify(a["studentId"], "Mentor assigned",
                f"{(mentor or {}).get('name','A mentor')} will guide your internship.",
                "/dashboard/student?tab=internship")
@@ -911,7 +1150,7 @@ def get_tasks(aid: str, req: Request):
 
 @api.post("/allocations/{aid}/tasks")
 def create_task(aid: str, body: TaskIn, req: Request):
-    u = me(req)
+    u = me(req, ["mentor", "admin"])
     doc = {"_id": nid("t_"), "allocationId": aid, **body.model_dump(),
            "comments": [], "createdAt": now_iso()}
     store.col("tasks").insert_one(doc)
@@ -936,6 +1175,12 @@ def patch_task(tid: str, body: TaskPatch, req: Request):
         raise HTTPException(404, "Task not found")
     patch = {k: v for k, v in body.model_dump().items()
              if v is not None and k not in ("comment", "commentBy")}
+    if u.get("role") == "student" and patch.get("status"):
+        allowed = {"todo": "in_progress", "in_progress": "review"}
+        if allowed.get(t.get("status")) != patch["status"]:
+            raise HTTPException(403, "Only your mentor can complete or change a reviewed task")
+    if u.get("role") not in ("mentor", "admin", "student") and patch.get("status"):
+        raise HTTPException(403, "You cannot change task status")
     if patch:
         store.col("tasks").update_one({"_id": tid}, {"$set": patch})
         t.update(patch)
@@ -1161,6 +1406,44 @@ def threads(req: Request):
     return out
 
 
+@api.post("/messages/threads")
+def start_thread(body: StartThreadIn, req: Request):
+    u = me(req)
+    if body.recipientId == u["_id"]:
+        raise HTTPException(400, "You cannot message yourself")
+    recipient = store.col("users").find_one({"_id": body.recipientId})
+    if not recipient or (recipient.get("role") == "admin" and u.get("role") == "admin"):
+        raise HTTPException(404, "Recipient not found")
+    participants = sorted([u["_id"], recipient["_id"]])
+    existing = next((t for t in store.col("threads").find() if sorted(t.get("participants", [])) == participants), None)
+    if existing:
+        return existing
+    thread = {"_id": nid("th_"), "participants": participants,
+              "subject": body.subject.strip() or "Direct message", "messages": [],
+              "createdAt": now_iso(), "updatedAt": now_iso()}
+    store.col("threads").insert_one(thread)
+    return thread
+
+
+@api.get("/messages/contacts")
+def message_contacts(req: Request):
+    u = me(req)
+    if u.get("role") == "admin":
+        rows = [x for x in store.col("users").find() if x.get("role") != "admin"]
+    elif u.get("role") == "company":
+        ids = {x["_id"] for x in store.col("users").find({"role": "admin"})}
+        for al in store.col("allocations").find({"companyId": u["_id"]}):
+            if al.get("studentId"): ids.add(al["studentId"])
+            if al.get("mentorId"): ids.add(al["mentorId"])
+        rows = [x for x in store.col("users").find() if x.get("_id") in ids]
+    else:
+        rows = []
+    unique = {}
+    for row in rows:
+        unique[row.get("email", row.get("_id"))] = row
+    return [pub(x) for x in unique.values()]
+
+
 @api.post("/messages/{tid}")
 async def send_message(tid: str, body: MessageIn, req: Request):
     u = me(req)
@@ -1236,26 +1519,39 @@ def overview(req: Request):
         pending_updates = [dict(up, studentName=((pub(store.col("users").find_one(
             {"_id": (store.col("allocations").find_one({"_id": up["allocationId"]}) or {}).get("studentId")})) or {}).get("name", "")))
             for aid in aids for up in store.col("updates").find({"allocationId": aid, "reviewStatus": "pending"})]
-        pending_tasks = []
+        update_history = []
         for aid in aids:
             al = store.col("allocations").find_one({"_id": aid}) or {}
             st = store.col("users").find_one({"_id": al.get("studentId")}) or {}
-            for t in store.col("tasks").find({"allocationId": aid, "status": "review"}):
-                pending_tasks.append({**t, "studentName": st.get("name", "")})
+            update_history.extend({**up, "studentName": st.get("name", "")}
+                                  for up in store.col("updates").find({"allocationId": aid}))
+        pending_tasks = []
+        task_history = []
+        for aid in aids:
+            al = store.col("allocations").find_one({"_id": aid}) or {}
+            st = store.col("users").find_one({"_id": al.get("studentId")}) or {}
+            for t in store.col("tasks").find({"allocationId": aid}):
+                enriched_task = {**t, "studentName": st.get("name", "")}
+                task_history.append(enriched_task)
+                if t.get("status") == "review":
+                    pending_tasks.append(enriched_task)
         upcoming_ms = []
         for aid in aids:
             for m in store.col("milestones").find({"allocationId": aid}):
                 if m.get("status") != "completed":
                     upcoming_ms.append(m)
         upcoming_ms.sort(key=lambda m: m.get("dueDate", ""))
-        return {"role": role, "interns": interns,
+        return {"role": role, "interns": interns, "allocations": interns,
                 "stats": {"active": len([a for a in als if a.get("status") == "active"]),
                           "onTrack": len([i for i in interns if i["dot"] == "on-track"]),
                           "attention": len([i for i in interns if i["dot"] != "on-track"]),
                           "pendingUpdates": len(pending_updates),
                           "pendingTasks": len(pending_tasks),
                           "upcomingMilestones": len(upcoming_ms)},
-                "pendingUpdates": pending_updates, "pendingTasks": pending_tasks,
+            "pendingUpdates": pending_updates, "pendingTasks": pending_tasks,
+                "reviewQueue": {"updates": pending_updates, "tasks": pending_tasks},
+                "updateHistory": update_history,
+                "taskHistory": task_history,
                 "upcomingMilestones": upcoming_ms[:6], "notifications": notifs}
 
     if role == "company":
@@ -1273,7 +1569,7 @@ def overview(req: Request):
         done_n = len([a for a in interns if a.get("status") == "completed"])
         total = active_n + done_n
         return {"role": role, "internships": my_ints, "applications": apps,
-                "byStatus": by_status, "interns": interns,
+            "byStatus": by_status, "interns": interns, "allocations": interns,
                 "stats": {"activeInternships": len([i for i in my_ints if i.get("status") == "open"]),
                           "totalApplications": len(apps),
                           "shortlisted": by_status.get("shortlisted", 0),
@@ -1356,10 +1652,33 @@ async def upload_resume(req: Request, file: UploadFile = File(...)):
     doc = {"_id": nid("r_"), "userId": u["_id"], "filename": file.filename,
            "stored": stored, "url": f"/api/files/{stored}",
            "skills": parsed.get("skills", []), "preview": parsed.get("preview", ""),
-           "chars": parsed.get("chars", 0), "createdAt": now_iso()}
+           "chars": parsed.get("chars", 0), "createdAt": now_iso(),
+           "name": parsed.get("name"), "degree": parsed.get("degree"),
+           "college": parsed.get("college"), "year": parsed.get("year"),
+           "phone": parsed.get("phone"), "email": parsed.get("email"),
+           "education": parsed.get("education", []), "projects": parsed.get("projects", []),
+           "experience": parsed.get("experience", []), "certifications": parsed.get("certifications", []),
+           "interests": parsed.get("interests", []), "preferredRoles": parsed.get("preferredRoles", []),
+           "summary": parsed.get("summary", "")}
     store.col("resumes").insert_one(doc)
-    store.col("users").update_one({"_id": u["_id"]},
-                                  {"$set": {"resumeName": file.filename, "resumeUrl": doc["url"]}})
+    patch = {"resumeName": file.filename, "resumeUrl": doc["url"]}
+    for key, value in {"name": parsed.get("name"), "phone": parsed.get("phone"),
+                       "college": parsed.get("college"), "degree": parsed.get("degree"),
+                       "year": parsed.get("year")}.items():
+        if value:
+            patch[key] = value
+    skills = set((u.get("skills") or []) + (parsed.get("skills") or []))
+    if parsed.get("skills"):
+        patch["skills"] = sorted(skills)
+    for key in ["education", "projects", "experience", "certifications", "interests", "preferredRoles"]:
+        value = parsed.get(key) or []
+        if value:
+            patch[key] = value
+    if parsed.get("summary"):
+        patch["bio"] = parsed["summary"]
+    if any(value for value in patch.values() if value not in (None, "", [], {})):
+        patch["profileComplete"] = True
+    store.col("users").update_one({"_id": u["_id"]}, {"$set": patch})
     return doc
 
 
@@ -1688,6 +2007,20 @@ class SessionIn(BaseModel):
     meetLink: str = ""
 
 
+def _jitsi_link(session_id: str) -> str:
+    domain = (os.getenv("JITSI_DOMAIN") or "meet.jit.si").strip().rstrip("/")
+    return f"https://{domain}/InterNova-{session_id}"
+
+
+def _ensure_jitsi_link(session: dict) -> dict:
+    domain = (os.getenv("JITSI_DOMAIN") or "meet.jit.si").strip().rstrip("/")
+    if not session.get("meetLink", "").startswith(f"https://{domain}/"):
+        session["meetLink"] = _jitsi_link(session.get("_id", nid("se_")))
+        if session.get("_id"):
+            store.col("sessions").update_one({"_id": session["_id"]}, {"$set": {"meetLink": session["meetLink"]}})
+    return session
+
+
 @api.get("/sessions")
 def list_sessions(req: Request, allocationId: str = Query("")):
     u = me(req)
@@ -1699,7 +2032,7 @@ def list_sessions(req: Request, allocationId: str = Query("")):
         ids = set(_my_allocation_ids(u))
         rows = [x for x in store.col("sessions").find() if x.get("allocationId") in ids]
     rows = sorted(rows, key=lambda x: x.get("date", ""))
-    return [_enrich_session(x) for x in rows]
+    return [_enrich_session(_ensure_jitsi_link(x)) for x in rows]
 
 
 @api.get("/sessions/upcoming")
@@ -1712,7 +2045,7 @@ def upcoming_sessions(req: Request, days: int = Query(14, le=60)):
             if x.get("allocationId") in ids and x.get("status") in ("proposed", "confirmed")
             and (x.get("date", "") or "") >= lo and (x.get("date", "") or "")[:10] <= hi_d]
     rows = sorted(rows, key=lambda x: x.get("date", ""))
-    return [_enrich_session(x) for x in rows]
+    return [_enrich_session(_ensure_jitsi_link(x)) for x in rows]
 
 
 @api.post("/sessions")
@@ -1729,7 +2062,7 @@ def create_session(body: SessionIn, req: Request):
          "title": body.title.strip() or "Mentor session",
          "description": body.description.strip(), "date": when,
          "durationMin": max(10, min(240, body.durationMin or 30)),
-         "meetLink": body.meetLink.strip(), "status": status,
+         "meetLink": _jitsi_link(nid("room_")), "status": status,
          "proposedBy": u["_id"], "notes": "", "actionItems": [],
          "createdAt": now_iso(), "updatedAt": now_iso(), "remindersSent": []}
     store.col("sessions").insert_one(s)
@@ -1765,9 +2098,11 @@ def patch_session(sid: str, body: dict, req: Request):
             raise HTTPException(403, "Only your mentor can update this session")
         patch["status"] = ns
     if role != "student":
-        for k in ("title", "description", "date", "meetLink", "notes"):
+        for k in ("title", "description", "date", "notes"):
             if k in body and body[k] is not None:
                 patch[k] = body[k]
+        if "meetLink" in body:
+            patch["meetLink"] = _jitsi_link(s.get("_id", sid))
         if "durationMin" in body:
             patch["durationMin"] = max(10, min(240, int(body["durationMin"] or 30)))
         if "actionItems" in body and isinstance(body["actionItems"], list):
@@ -1778,7 +2113,7 @@ def patch_session(sid: str, body: dict, req: Request):
     patch["updatedAt"] = now_iso()
     store.col("sessions").update_one({"_id": sid}, {"$set": patch})
     s = store.col("sessions").find_one({"_id": sid})
-    en = _enrich_session(s)
+    en = _enrich_session(_ensure_jitsi_link(s))
     if patch.get("status") == "confirmed":
         stu = en["student"]
         if stu.get("_id"):

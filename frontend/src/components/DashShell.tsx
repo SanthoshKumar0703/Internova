@@ -72,11 +72,11 @@ export default function DashShell({
       key={n.id}
       onClick={() => { onNav(n.id); setDrawer(false); }}
       title={n.label}
-      className={`relative flex items-center gap-3 rounded-xl transition-all ${
+      className={`relative flex items-center gap-3 rounded-xl transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-400/80 focus-visible:ring-offset-2 focus-visible:ring-offset-[#f4f2ec] dark:focus-visible:ring-offset-void ${
         thin ? "justify-center w-12 h-12 mx-auto" : "px-3.5 py-2.5 w-full text-[14px] font-medium"
       } ${active === n.id
         ? "bg-primary/15 text-primary dark:bg-primary/20 dark:text-white shadow-[inset_0_0_0_1px_rgba(123,57,252,0.5),0_4px_20px_-6px_rgba(123,57,252,0.6)]"
-        : "text-slate-500 hover:text-slate-900 hover:bg-slate-900/5 dark:text-cream-dim dark:hover:text-cream dark:hover:bg-white/5"}`}>
+        : "text-slate-600 hover:text-slate-900 hover:bg-violet-50 dark:text-cream-dim dark:hover:text-cream dark:hover:bg-white/10"}`}>
       <span className="shrink-0">{n.icon}</span>
       {!thin && <span className="truncate">{n.label}</span>}
       {n.badge ? (

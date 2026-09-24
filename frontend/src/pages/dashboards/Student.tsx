@@ -2,8 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   Award, BadgeCheck, Bell, Briefcase, Building2, CalendarCheck, CalendarPlus, Check, ChevronLeft, ChevronRight,
-  Clock, FileText, Flag, FolderOpen, GraduationCap, Home, Inbox, LayoutGrid, MapPin, MessageSquare,
-  Plus, Search, Send, Sparkles, TrendingUp, User as UserIcon, Video, X,
+  Clock, Download, FileText, Flag, FolderOpen, GraduationCap, Home, Inbox, LayoutGrid, MapPin, MessageSquare,
+  Plus, Search, Send, Sparkles, TrendingUp, Upload, User as UserIcon, Video, X,
 } from "lucide-react";
 import DashShell from "../../components/DashShell";
 import {
@@ -39,7 +39,7 @@ const taskCols = [
   { id: "todo", label: "To Do" }, { id: "in_progress", label: "In Progress" },
   { id: "review", label: "Review" }, { id: "completed", label: "Completed" },
 ];
-const nextStatus: Record<string, string> = { todo: "in_progress", in_progress: "review", review: "completed" };
+const nextStatus: Record<string, string> = { todo: "in_progress", in_progress: "review" };
 
 function offlineAttendance(year: number, month: number) {
   const rows: any[] = [];
@@ -60,6 +60,9 @@ export default function Student() {
   const [ov, setOv] = useState<any>(mockStudentOverview);
   const [loading, setLoading] = useState(true);
   const [showOnboard, setShowOnboard] = useState(sp.get("onboarding") === "1");
+  const [applicationsViewed, setApplicationsViewed] = useState(() => {
+    try { return sessionStorage.getItem("internova_applications_viewed") === "1"; } catch { return false; }
+  });
 
   const load = async () => {
     const r = await safe(() => api.overview(), mockStudentOverview);
@@ -67,6 +70,11 @@ export default function Student() {
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
+  useEffect(() => {
+    if (tab !== "applications") return;
+    setApplicationsViewed(true);
+    try { sessionStorage.setItem("internova_applications_viewed", "1"); } catch {}
+  }, [tab]);
   const setTab = (t: string) => { setShowOnboard(false); setSp(t === "overview" ? {} : { tab: t }); window.scrollTo(0, 0); };
 
   const al = ov.allocation;
@@ -87,7 +95,7 @@ export default function Student() {
   const nav = [
     { id: "overview", label: "Overview", icon: <Home size={20} /> },
     { id: "find", label: "Find Internships", icon: <Search size={20} /> },
-    { id: "applications", label: "Applications", icon: <FileText size={20} />, badge: (ov.applications || []).length || undefined },
+    { id: "applications", label: "Applications", icon: <FileText size={20} />, badge: !applicationsViewed ? ((ov.applications || []).length || undefined) : undefined },
     { id: "internship", label: "My Internship", icon: <Briefcase size={20} /> },
     { id: "reports", label: "Reports", icon: <TrendingUp size={20} /> },
     { id: "documents", label: "Documents", icon: <FolderOpen size={20} /> },
@@ -129,11 +137,116 @@ export default function Student() {
   );
 }
 
+function toList(value: any): string[] {
+  if (Array.isArray(value)) return value.map((x: any) => String(x).trim()).filter(Boolean);
+  if (typeof value === "string") return value.split(",").map((x: string) => x.trim()).filter(Boolean);
+  return [];
+}
+
+function listText(value: any) {
+  return toList(value).join(", ");
+}
+
+function profileStrengthScore(u: any) {
+  const checks = [
+    [u?.name, 15],
+    [u?.phone, 10],
+    [u?.college, 12],
+    [u?.degree, 10],
+    [u?.year, 8],
+    [u?.cgpa, 8],
+    [u?.location, 6],
+    [(u?.skills || []).length > 0, 12],
+    [(u?.education || []).length > 0, 5],
+    [(u?.projects || []).length > 0, 5],
+    [(u?.experience || []).length > 0, 5],
+    [(u?.certifications || []).length > 0, 5],
+    [(u?.interests || []).length > 0, 4],
+    [(u?.preferredRoles || []).length > 0, 5],
+  ];
+  const total = checks.reduce((sum, [ok, weight]) => sum + (ok ? Number(weight) : 0), 0);
+  return Math.min(100, Math.max(0, Math.round(total)));
+}
+
+function ResumeProfileSetup() {
+  const { user } = useAuth();
+  const toast = useToast();
+  const [resume, setResume] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+
+  const loadResume = async () => {
+    try {
+      const r = await api.myResume().catch(() => null);
+      setResume(r || null);
+    } catch {}
+  };
+
+  useEffect(() => { loadResume(); }, [user?._id]);
+
+  const uploadResume = async (file?: File) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const r = await api.uploadResume(file);
+      setResume(r);
+      toast("success", "Resume uploaded successfully.");
+    } catch (e: any) {
+      toast("error", e.detail || "Resume upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
+      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500 dark:text-cream-dim">Student dashboard</p>
+          <h3 className="font-extrabold text-xl text-slate-900 dark:text-cream mt-1">Resume upload</h3>
+        </div>
+        {!resume && (
+          <div className="text-xs font-semibold text-slate-500 dark:text-cream-dim">Keep profile details on the Profile page</div>
+        )}
+      </div>
+
+      {!resume ? (
+        <div className="mt-4 rounded-2xl border border-dashed border-violet-200 dark:border-violet-400/30 bg-violet-50/60 dark:bg-violet-500/5 p-4">
+          <p className="font-extrabold text-slate-900 dark:text-cream">Upload Resume</p>
+          <p className="text-sm text-slate-500 dark:text-cream-dim mt-1">Add your PDF or DOCX resume for analysis and matching.</p>
+          <label className="btn-hero mt-3 inline-flex items-center gap-2 px-5 py-2.5 bg-primary text-white text-sm font-cabin cursor-pointer">
+            <Upload size={15} /> {busy ? "Uploading…" : "Upload Resume"}
+            <input type="file" accept=".pdf,.docx,.txt,.md" className="hidden" disabled={busy}
+              onChange={(e) => { uploadResume(e.target.files?.[0]); e.target.value = ""; }} />
+          </label>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-2xl border border-violet-200 dark:border-violet-400/30 bg-gradient-to-br from-violet-50 via-white to-slate-50 dark:from-violet-500/10 dark:via-[#1c1726] dark:to-[#111827] p-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="font-extrabold text-slate-900 dark:text-cream">Resume uploaded</p>
+              <p className="text-sm text-slate-500 dark:text-cream-dim break-all">{resume.filename}</p>
+            </div>
+            <label className="btn-hero inline-flex items-center gap-2 px-4 py-2 bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a] text-xs font-cabin cursor-pointer">
+              <Upload size={14} /> {busy ? "Uploading…" : "Update Resume"}
+              <input type="file" accept=".pdf,.docx,.txt,.md" className="hidden" disabled={busy}
+                onChange={(e) => { uploadResume(e.target.files?.[0]); e.target.value = ""; }} />
+            </label>
+          </div>
+          <a href={resume.url} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-xs font-bold text-violet-700 dark:text-violet-300 hover:text-violet-900 dark:hover:text-violet-200">
+            <Download size={13} /> Open resume
+          </a>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Overview({ ov, go, openSessions }: any) {
   const al = ov.allocation;
   const s = al?.summary;
   return (
     <div className="space-y-5">
+      <ResumeProfileSetup />
       <div className="grid lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2 bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
           {al ? (
@@ -270,7 +383,7 @@ function Overview({ ov, go, openSessions }: any) {
 }
 
 function Find({ go, reload }: any) {
-  const { user } = useAuth();
+  const { user, setUser } = useAuth();
   const toast = useToast();
   const [q, setQ] = useState("");
   const [domain, setDomain] = useState("");
@@ -299,7 +412,6 @@ function Find({ go, reload }: any) {
   };
 
   const apply = async () => {
-    if (!cover.trim()) return toast("error", "Write a short cover letter first.");
     setApplying(true);
     try {
       await api.apply({ internshipId: detail._id, coverLetter: cover });
@@ -309,6 +421,16 @@ function Find({ go, reload }: any) {
       reload();
     } catch (e: any) { toast("error", e.detail || "Could not apply."); }
     finally { setApplying(false); }
+  };
+
+  const recFor = (it: any) => (recs || []).find((r: any) => r.internship?._id === it._id) || null;
+  const matchFor = (it: any) => {
+    const rec = recFor(it);
+    if (rec) return rec;
+    const mine = (user?.skills || []).map((s: string) => s.toLowerCase());
+    const hit = (it.skills || []).filter((s: string) => mine.includes(String(s).toLowerCase()));
+    const missing = (it.skills || []).filter((s: string) => !mine.includes(String(s).toLowerCase()));
+    return { score: it.skills?.length ? Math.round((hit.length / it.skills.length) * 100) : 0, reasons: hit.length ? [`Matches ${hit.length}/${it.skills.length} core skills`] : ["Build your profile to strengthen this match"], missing };
   };
 
   return (
@@ -377,7 +499,9 @@ function Find({ go, reload }: any) {
               <div className="flex items-center justify-between mt-4 pt-3 border-t border-slate-100 dark:border-white/5 text-xs text-slate-500 dark:text-cream-dim">
                 <span>{it.stipend}</span><span className="tabular">Apply by {fmt(it.deadline)}</span>
               </div>
-              <button onClick={() => setDetail(it)} className="btn-hero w-full mt-3 py-2.5 bg-primary text-white text-sm font-cabin">View & Apply</button>
+              <button onClick={() => setDetail(it)} className={`btn-hero w-full mt-3 py-2.5 text-sm font-cabin ${appliedIds.includes(it._id) ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-300/40" : "bg-primary text-white"}`}>
+                {appliedIds.includes(it._id) ? "View Application" : "View & Apply"}
+              </button>
             </div>
           );
         })}
@@ -387,7 +511,42 @@ function Find({ go, reload }: any) {
         {detail && (
           <div className="text-cream">
             <p className="text-sm text-cream-dim -mt-2">{detail.companyName} · {detail.location} · {detail.mode} · {detail.duration}</p>
-            <div className="flex flex-wrap gap-1.5 mt-3">
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-violet-200">Match score</p>
+                  <p className="text-3xl font-black text-white tabular mt-1">{matchFor(detail).score}%</p>
+                </div>
+                <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-300 text-[11px] font-bold">Recommended</span>
+              </div>
+              <div className="mt-3"><ProgressBar value={matchFor(detail).score} /></div>
+              <div className="mt-3 space-y-1.5 text-sm text-cream-dim">
+                {(matchFor(detail).reasons || []).slice(0, 3).map((reason: string) => (
+                  <div key={reason} className="flex gap-2">
+                    <Check size={14} className="mt-1 text-emerald-400 shrink-0" />
+                    {reason}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <p className="font-bold text-sm mt-4 mb-2">Why you are a good match</p>
+            <div className="space-y-2 text-sm text-cream-dim">
+              {(matchFor(detail).reasons || []).map((reason: string) => (
+                <div key={reason} className="flex gap-2">
+                  <Check size={14} className="mt-1 text-violet-300 shrink-0" />
+                  {reason}
+                </div>
+              ))}
+            </div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+              <p className="font-bold text-sm mb-2">Missing skills</p>
+              {(matchFor(detail).missing || []).length ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {(matchFor(detail).missing || []).slice(0, 6).map((s: string) => <span key={s} className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 border border-white/15">{s}</span>)}
+                </div>
+              ) : <p className="text-sm text-emerald-300">You match this internship very closely.</p>}
+            </div>
+            <div className="flex flex-wrap gap-1.5 mt-4">
               {(detail.skills || []).map((s: string) => <span key={s} className="text-[11px] px-2.5 py-1 rounded-full bg-white/5 border border-white/15">{s}</span>)}
             </div>
             <p className="text-sm text-cream/85 leading-relaxed mt-4">{detail.description}</p>
@@ -406,7 +565,7 @@ function Find({ go, reload }: any) {
               </div>
             ) : (
               <div className="mt-5">
-                <TextArea label="Cover letter" placeholder="Why are you a great fit? 3–4 lines work best." value={cover} onChange={(e: any) => setCover(e.target.value)} />
+                <TextArea label="Cover letter" placeholder="Optional: why you are a strong fit." value={cover} onChange={(e: any) => setCover(e.target.value)} />
                 <button onClick={apply} disabled={applying} className="btn-hero w-full mt-3 py-3 bg-primary btn-primary-glow text-white disabled:opacity-60">
                   {applying ? "Submitting…" : "Submit Application"}
                 </button>
@@ -420,17 +579,39 @@ function Find({ go, reload }: any) {
 }
 
 function Applications({ ov }: any) {
-  const apps = ov.applications || [];
+  const [apps, setApps] = useState<any[]>(ov.applications || []);
+  const [allocations, setAllocations] = useState<any[]>(ov.allocations || []);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let live = true;
+    Promise.all([api.applications(), api.allocations()]).then(([rows, currentAllocations]: any[]) => {
+      if (live) {
+        setApps(rows);
+        setAllocations(currentAllocations);
+      }
+    }).catch(() => {
+      if (live) {
+        setApps(ov.applications || []);
+        setAllocations(ov.allocations || []);
+      }
+    }).finally(() => {
+      if (live) setLoading(false);
+    });
+    return () => { live = false; };
+  }, [ov.applications]);
   const allocByInt: Record<string, any> = {};
-  (ov.allocations || []).forEach((a: any) => { allocByInt[a.internshipId] = a; });
+  allocations.forEach((a: any) => { allocByInt[a.internshipId] = a; });
   if (ov.allocation) allocByInt[ov.allocation.internshipId] = ov.allocation;
+  if (loading && !apps.length) return <div className="grid place-items-center py-16"><Spinner light /></div>;
   if (!apps.length)
     return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<FileText size={22} />} title="No applications yet" body="Your applications and their live status will appear here." /></div>;
   return (
     <div className="space-y-4">
       {apps.map((a: any) => {
-        const st = APP_STATUS[a.status] || APP_STATUS.applied;
         const alloc = allocByInt[a.internshipId];
+        const displayStatus = alloc && ["accepted", "selected"].includes(a.status) ? "allocated" : a.status;
+        const st = APP_STATUS[displayStatus] || APP_STATUS.applied;
+        const hasCertificate = (ov.certificates || []).some((c: any) => c.status === "valid" && c.role === a.internship?.title);
         return (
           <div key={a._id} className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -440,7 +621,21 @@ function Applications({ ov }: any) {
               </div>
               <Badge tone={st.tone}>{st.label}</Badge>
             </div>
-            <div className="mt-4 max-w-2xl"><JourneyStepper status={a.status} allocationStatus={alloc?.status === "completed" ? "completed" : alloc?.status === "active" ? "active" : alloc ? "started" : undefined} /></div>
+            <div className="mt-4 max-w-2xl"><JourneyStepper status={displayStatus} hasCertificate={hasCertificate} allocationStatus={alloc?.status === "completed" ? "completed" : alloc?.status === "active" ? "active" : alloc ? "started" : undefined} /></div>
+            {displayStatus === "allocated" && (
+              <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-500/20 bg-emerald-50/80 dark:bg-emerald-500/10 px-4 py-3">
+                <p className="text-xs font-extrabold uppercase tracking-wide text-emerald-700 dark:text-emerald-300">Mentor assigned</p>
+                {alloc?.mentor ? (
+                  <div className="flex items-center gap-3 mt-2">
+                    <Avatar name={alloc.mentor.name} avatar={alloc.mentor.avatar} color={alloc.mentor.color} size={36} />
+                    <div>
+                      <p className="font-bold text-slate-900 dark:text-cream">{alloc.mentor.name}</p>
+                      <p className="text-xs text-slate-600 dark:text-cream-dim">{(alloc.mentor.expertise || []).slice(0, 3).join(" · ") || "Mentor assigned to guide your internship"}</p>
+                    </div>
+                  </div>
+                ) : <p className="text-sm text-slate-600 dark:text-cream-dim mt-1">Your mentor is being assigned.</p>}
+              </div>
+            )}
             {a.coverLetter && <p className="text-sm text-slate-500 dark:text-cream-dim mt-3 italic border-l-2 border-violet-200 dark:border-violet-400/30 pl-3">“{a.coverLetter}”</p>}
           </div>
         );
@@ -503,18 +698,9 @@ function InternshipHub({ al, reload, sub0 }: any) {
 
 function TasksBoard({ tasks, aid, onChange, reload }: any) {
   const toast = useToast();
-  const [open, setOpen] = useState(false);
-  const [title, setTitle] = useState("");
-  const [due, setDue] = useState("");
   const [commentFor, setCommentFor] = useState("");
   const [comment, setComment] = useState("");
 
-  const add = async () => {
-    if (!title.trim()) return toast("error", "Give the task a title.");
-    try { await api.createTask(aid, { title: title.trim(), dueDate: due }); }
-    catch { toast("info", "Offline preview — task kept locally."); }
-    setTitle(""); setDue(""); setOpen(false); reload();
-  };
   const sendComment = async (id: string) => {
     if (!comment.trim()) return;
     try { await api.patchTask(id, { comment: comment.trim() }); }
@@ -524,16 +710,6 @@ function TasksBoard({ tasks, aid, onChange, reload }: any) {
 
   return (
     <div>
-      <div className="flex justify-end mb-3">
-        <button onClick={() => setOpen((v) => !v)} className="btn-hero inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-sm font-cabin"><Plus size={15} /> New Task</button>
-      </div>
-      {open && (
-        <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-4 mb-4 grid md:grid-cols-[1fr_200px_auto] gap-3">
-          <Input tone="light" placeholder="Task title…" value={title} onChange={(e: any) => setTitle(e.target.value)} />
-          <Input tone="light" type="date" value={due} onChange={(e: any) => setDue(e.target.value)} />
-          <button onClick={add} className="btn-hero px-5 py-2.5 bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a] text-sm font-cabin">Add</button>
-        </div>
-      )}
       <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-4">
         {taskCols.map((c) => {
           const list = tasks.filter((t: any) => t.status === c.id);
@@ -562,10 +738,11 @@ function TasksBoard({ tasks, aid, onChange, reload }: any) {
                     <div className="flex gap-2 mt-2.5">
                       {nextStatus[t.status] && (
                         <button onClick={() => onChange(t._id, { status: nextStatus[t.status] })}
-                          className="flex-1 text-xs font-bold py-1.5 rounded-lg bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 hover:bg-violet-200 transition">
+                          className="flex-1 text-xs font-bold py-1.5 rounded-lg bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 hover:bg-violet-200 hover:text-violet-900 dark:hover:bg-violet-500/30 dark:hover:text-white transition">
                           Move to {taskCols.find((x) => x.id === nextStatus[t.status])?.label}
                         </button>
                       )}
+                      {t.status === "review" && <span className="flex-1 text-center text-xs font-bold py-1.5 rounded-lg bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300">Waiting for mentor review</span>}
                       <button onClick={() => setCommentFor(commentFor === t._id ? "" : t._id)} className="px-2.5 py-1.5 rounded-lg bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-cream-dim hover:bg-slate-200 dark:hover:bg-white/15 transition grid place-items-center" title="Comment"><MessageSquare size={13} /></button>
                     </div>
                     {commentFor === t._id && (
@@ -697,13 +874,20 @@ function UpdatesSec({ aid, seed, reloadAll }: any) {
   const submit = async () => {
     if (!f.workedOn.trim() || !f.completed.trim()) return toast("error", "Tell us what you worked on and completed.");
     setBusy(true);
+    const tempId = `pending-${Date.now()}`;
+    const optimistic = { ...f, _id: tempId, date: new Date().toISOString().slice(0, 10), hours: parseFloat(f.hours) || 0, reviewStatus: "pending" };
+    setItems((p: any[]) => [optimistic, ...p]);
+    setF({ workedOn: "", completed: "", learned: "", blockers: "", hours: "" });
+    toast("info", "Daily update saved locally while it syncs.");
     try {
       const d = await api.postUpdate(aid, { ...f, hours: parseFloat(f.hours) || 0 });
-      setItems((p: any[]) => [d, ...p]);
-      setF({ workedOn: "", completed: "", learned: "", blockers: "", hours: "" });
+      setItems((p: any[]) => p.map((item) => item._id === tempId ? d : item));
       toast("success", "Daily update logged. Your mentor has been notified.");
       reloadAll();
-    } catch { toast("error", "Could not save — is the server running?"); }
+    } catch {
+      setItems((p: any[]) => p.filter((item) => item._id !== tempId));
+      toast("error", "Could not save — is the server running?");
+    }
     finally { setBusy(false); }
   };
 
@@ -864,6 +1048,12 @@ function ProfileSec({ reload }: any) {
     bio: user?.bio || "", college: user?.college || "", degree: user?.degree || "",
     year: user?.year || "", cgpa: user?.cgpa || "",
     skills: (user?.skills || []).join(", "),
+    education: (user?.education || []).join(", "),
+    projects: (user?.projects || []).join(", "),
+    experience: (user?.experience || []).join(", "),
+    certifications: (user?.certifications || []).join(", "),
+    interests: (user?.interests || []).join(", "),
+    preferredRoles: (user?.preferredRoles || []).join(", "),
   });
   const [busy, setBusy] = useState(false);
   const set = (k: string, v: string) => setF((p) => ({ ...p, [k]: v }));
@@ -872,7 +1062,15 @@ function ProfileSec({ reload }: any) {
     setBusy(true);
     try {
       const u = await api.patchUser(user!._id, {
-        ...f, skills: f.skills.split(",").map((s) => s.trim()).filter(Boolean), profileComplete: true,
+        ...f,
+        skills: f.skills.split(",").map((s) => s.trim()).filter(Boolean),
+        education: f.education.split(",").map((s) => s.trim()).filter(Boolean),
+        projects: f.projects.split(",").map((s) => s.trim()).filter(Boolean),
+        experience: f.experience.split(",").map((s) => s.trim()).filter(Boolean),
+        certifications: f.certifications.split(",").map((s) => s.trim()).filter(Boolean),
+        interests: f.interests.split(",").map((s) => s.trim()).filter(Boolean),
+        preferredRoles: f.preferredRoles.split(",").map((s) => s.trim()).filter(Boolean),
+        profileComplete: true,
       });
       setUser(u);
       toast("success", "Profile saved.");
@@ -902,6 +1100,12 @@ function ProfileSec({ reload }: any) {
           <Input tone="light" label="CGPA" value={f.cgpa} onChange={(e: any) => set("cgpa", e.target.value)} />
         </div>
         <div className="md:col-span-2"><Input tone="light" label="Skills (comma separated)" value={f.skills} onChange={(e: any) => set("skills", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Education (comma separated)" value={f.education} onChange={(e: any) => set("education", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Projects (comma separated)" value={f.projects} onChange={(e: any) => set("projects", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Experience (comma separated)" value={f.experience} onChange={(e: any) => set("experience", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Certifications (comma separated)" value={f.certifications} onChange={(e: any) => set("certifications", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Interests (comma separated)" value={f.interests} onChange={(e: any) => set("interests", e.target.value)} /></div>
+        <div className="md:col-span-2"><Input tone="light" label="Preferred roles (comma separated)" value={f.preferredRoles} onChange={(e: any) => set("preferredRoles", e.target.value)} /></div>
         <div className="md:col-span-2"><TextArea tone="light" label="Bio" value={f.bio} onChange={(e: any) => set("bio", e.target.value)} /></div>
       </div>
       <button onClick={save} disabled={busy} className="btn-hero px-8 py-3 bg-primary text-white font-cabin disabled:opacity-60">
@@ -1007,21 +1211,22 @@ function NotifsSec() {
     try { id ? await api.readNotif(id) : await api.readAllNotifs(); load(); } catch {}
   };
   return (
-    <div className="max-w-2xl space-y-3">
-      <div className="flex justify-end">
-        <button onClick={() => read()} className="text-sm font-bold text-violet-600 dark:text-violet-300 hover:text-violet-800 dark:hover:text-violet-200">Mark all as read</button>
+    <div className="w-full max-w-none space-y-3">
+      <div className="flex items-center justify-between gap-3 px-1">
+        <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500 dark:text-cream-dim">Your notifications</p>
+        <button onClick={() => read()} className="shrink-0 text-sm font-bold text-violet-600 dark:text-violet-300 hover:text-violet-800 dark:hover:text-violet-200">Mark all as read</button>
       </div>
       {items.map((n) => (
-        <div key={n._id} className={`bg-white dark:bg-card border rounded-2xl p-4 flex gap-3 ${n.read ? "border-slate-200 dark:border-white/10 opacity-70" : "border-violet-200 dark:border-violet-400/30"}`}>
+        <div key={n._id} className={`bg-white dark:bg-card border rounded-2xl p-4 flex items-start gap-3 ${n.read ? "border-slate-200 dark:border-white/10 opacity-70" : "border-violet-200 dark:border-violet-400/30"}`}>
           <span className={`w-9 h-9 rounded-xl grid place-items-center shrink-0 ${n.read ? "bg-slate-100 dark:bg-white/10 text-slate-400 dark:text-cream-dim/70" : "bg-violet-100 dark:bg-violet-500/15 text-violet-600 dark:text-violet-300"}`}>
             <Bell size={16} />
           </span>
-          <div className="flex-1">
-            <p className="font-bold text-slate-900 dark:text-cream text-sm">{n.title}</p>
-            <p className="text-sm text-slate-500 dark:text-cream-dim">{n.body}</p>
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-slate-900 dark:text-cream text-sm break-words">{n.title}</p>
+            <p className="text-sm text-slate-500 dark:text-cream-dim break-words">{n.body}</p>
             <p className="text-[11px] text-slate-400 dark:text-cream-dim/70 mt-1 tabular">{fmt(n.createdAt)}</p>
           </div>
-          {!n.read && <button onClick={() => read(n._id)} className="text-xs font-bold text-violet-600 dark:text-violet-300 self-start">Mark read</button>}
+          {!n.read && <button onClick={() => read(n._id)} className="shrink-0 whitespace-nowrap text-xs font-bold text-violet-600 dark:text-violet-300 self-start">Mark read</button>}
         </div>
       ))}
       {items.length === 0 && <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<Bell size={22} />} title="No notifications" body="Application updates, tasks and feedback will appear here." /></div>}

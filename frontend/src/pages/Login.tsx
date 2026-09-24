@@ -80,9 +80,20 @@ export default function Login() {
     const init = () => {
       const g = (window as any).google;
       if (!g?.accounts?.id || !googleBtnRef.current) return;
-      g.accounts.id.initialize({ client_id: GOOGLE_CLIENT_ID, callback: handleGoogleCredential });
+      g.accounts.id.initialize({
+        client_id: GOOGLE_CLIENT_ID,
+        callback: handleGoogleCredential,
+        auto_select: false,
+        cancel_on_tap_outside: true,
+      });
       g.accounts.id.renderButton(googleBtnRef.current, {
-        theme: "filled_black", size: "large", shape: "pill", width: 340, text: "continue_with",
+        type: "standard",
+        theme: "outline",
+        size: "large",
+        shape: "pill",
+        text: "continue_with",
+        logo_alignment: "left",
+        width: 340,
       });
       setGoogleReady(true);
     };
@@ -260,8 +271,10 @@ export default function Login() {
               </div>
               {GOOGLE_CLIENT_ID ? (
                 <div className="flex justify-center">
-                  <div ref={googleBtnRef} />
-                  {!googleReady && <p className="text-xs text-slate-400 dark:text-cream-dim/60">Loading Google Sign-In…</p>}
+                  <div className="w-full max-w-[340px] rounded-[18px] border border-slate-200 bg-white/80 p-1 shadow-[0_12px_24px_rgba(15,23,42,0.08)] backdrop-blur-sm dark:border-white/10 dark:bg-white/5 dark:shadow-[0_12px_24px_rgba(0,0,0,0.24)]">
+                    <div ref={googleBtnRef} className="w-full [&_iframe]:!rounded-[16px] [&_iframe]:!shadow-none [&_iframe]:!border-0 [&_iframe]:!overflow-hidden" />
+                  </div>
+                  {!googleReady && <p className="mt-2 text-xs text-slate-400 dark:text-cream-dim/60">Loading Google Sign-In…</p>}
                 </div>
               ) : (
                 <div className="rounded-xl border border-amber-400/25 bg-amber-500/10 px-3 py-2 text-sm text-amber-900 dark:text-amber-100">

@@ -46,7 +46,7 @@ export function SessionsPanel({ allocationId, role }: { allocationId: string; ro
   const [actions, setActions] = useState<{ text: string; done: boolean }[]>([]);
   const [newAction, setNewAction] = useState("");
   const [editing, setEditing] = useState("");
-  const [ef, setEf] = useState({ date: "", meetLink: "" });
+  const [ef, setEf] = useState({ date: "" });
   const set = (k: string, v: any) => setF((p) => ({ ...p, [k]: v }));
 
   const load = async () => {
@@ -131,9 +131,8 @@ export function SessionsPanel({ allocationId, role }: { allocationId: string; ro
         {editing === s._id ? (
           <div className="mt-3 grid sm:grid-cols-[220px_1fr_auto] gap-2">
             <Input tone="light" type="datetime-local" value={ef.date} onChange={(e: any) => setEf((p) => ({ ...p, date: e.target.value }))} />
-            <Input tone="light" placeholder="Meet link https://…" value={ef.meetLink} onChange={(e: any) => setEf((p) => ({ ...p, meetLink: e.target.value }))} />
             <span className="flex gap-2">
-              <button onClick={() => { act(s._id, { date: ef.date.length === 16 ? ef.date + ":00" : ef.date, meetLink: ef.meetLink }, "Session updated."); setEditing(""); }} className="btn-hero px-4 py-2 bg-primary text-white text-sm font-cabin">Save</button>
+              <button onClick={() => { act(s._id, { date: ef.date.length === 16 ? ef.date + ":00" : ef.date }, "Session updated."); setEditing(""); }} className="btn-hero px-4 py-2 bg-primary text-white text-sm font-cabin">Save</button>
               <button onClick={() => setEditing("")} className="btn-hero px-4 py-2 bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-cream-dim text-sm font-cabin">Cancel</button>
             </span>
           </div>
@@ -188,7 +187,7 @@ export function SessionsPanel({ allocationId, role }: { allocationId: string; ro
             {role === "mentor" && s.status === "confirmed" && (
               <>
                 <button onClick={() => startComplete(s)} className="btn-hero inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-sm font-cabin"><Check size={14} /> Complete with notes</button>
-                <button onClick={() => { setEditing(s._id); setEf({ date: (s.date || "").slice(0, 16), meetLink: s.meetLink || "" }); }} className="btn-hero inline-flex items-center gap-1.5 px-4 py-2 bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-cream-dim text-sm font-cabin"><Pencil size={13} /> Reschedule</button>
+                <button onClick={() => { setEditing(s._id); setEf({ date: (s.date || "").slice(0, 16) }); }} className="btn-hero inline-flex items-center gap-1.5 px-4 py-2 bg-slate-100 dark:bg-white/10 text-slate-600 dark:text-cream-dim text-sm font-cabin"><Pencil size={13} /> Reschedule</button>
                 <button onClick={() => act(s._id, { status: "cancelled" }, "Session cancelled.")} className="btn-hero px-4 py-2 bg-rose-100 dark:bg-rose-500/15 text-rose-600 dark:text-rose-300 text-sm font-cabin">Cancel</button>
               </>
             )}
@@ -233,9 +232,9 @@ export function SessionsPanel({ allocationId, role }: { allocationId: string; ro
               {[15, 30, 45, 60, 90].map((m) => <option key={m} value={m}>{m} minutes</option>)}
             </select>
           </div>
-          {role === "mentor" && (
-            <div className="md:col-span-2"><Input tone="light" label="Meet link (optional)" placeholder="https://meet.google.com/…" value={f.meetLink} onChange={(e: any) => set("meetLink", e.target.value)} /></div>
-          )}
+          <div className="md:col-span-2 rounded-xl bg-violet-50 dark:bg-violet-500/10 border border-violet-100 dark:border-violet-400/20 px-3.5 py-2.5 text-sm text-violet-700 dark:text-violet-300">
+            A private Jitsi room will be generated automatically for this session.
+          </div>
           <div className="md:col-span-2"><TextArea tone="light" label="Agenda (optional)" placeholder="What will you cover?" value={f.description} onChange={(e: any) => set("description", e.target.value)} /></div>
           <div className="md:col-span-2 flex gap-2">
             <button onClick={submit} disabled={busy} className="btn-hero px-6 py-2.5 bg-primary text-white text-sm font-cabin disabled:opacity-60">

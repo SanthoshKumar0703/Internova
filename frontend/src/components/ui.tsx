@@ -64,11 +64,21 @@ export function TextArea({ label, tone = "dark", className = "", ...rest }: any)
 export function Label({ children }: { children: React.ReactNode }) {
   return <span className="block text-[13px] font-medium mb-1.5 text-slate-600 dark:text-cream-dim">{children}</span>;
 }
-export function Select({ label, tone = "dark", children, className = "", ...rest }: any) {
+export function Select({ label, tone = "dark", children, className = "", options, ...rest }: any) {
+  const items = Array.isArray(options) ? options : [];
   return (
     <label className="block">
       {label && <span className={`block text-[13px] font-medium mb-1.5 ${tone === "light" ? "text-slate-600 dark:text-cream-dim" : "text-slate-500 dark:text-cream-dim"}`}>{label}</span>}
-      <select {...rest} className={`${toneCls(tone)} w-full px-3.5 py-2.5 text-[15px] ${className}`}>{children}</select>
+      <select {...rest} className={`${toneCls(tone)} w-full px-3.5 py-2.5 text-[15px] ${className}`}>
+        {children || items.map((opt: any) => {
+          if (typeof opt === "string") {
+            return <option key={opt} value={opt}>{opt}</option>;
+          }
+          const value = opt?.value ?? opt?.label ?? "";
+          const labelText = opt?.label ?? opt?.value ?? "";
+          return <option key={String(value)} value={value}>{labelText}</option>;
+        })}
+      </select>
     </label>
   );
 }
@@ -194,16 +204,17 @@ export const APP_STATUS: Record<string, { label: string; tone: string }> = {
   under_review: { label: "Under Review", tone: "blue" },
   shortlisted: { label: "Shortlisted", tone: "amber" },
   selected: { label: "Selected", tone: "purple" },
+  accepted: { label: "Accepted", tone: "green" },
   allocated: { label: "Allocated", tone: "green" },
   rejected: { label: "Rejected", tone: "red" },
 };
-const P1 = ["applied", "under_review", "shortlisted", "selected", "allocated"];
-const P1_LABELS = ["Applied", "Review", "Shortlisted", "Selected", "Allocated"];
+const P1 = ["applied", "under_review", "shortlisted", "selected", "accepted", "allocated"];
+const P1_LABELS = ["Applied", "Review", "Shortlisted", "Selected", "Accepted", "Allocated"];
 const P2 = ["started", "active", "evaluation", "completed", "certificate"];
 const P2_LABELS = ["Started", "Active", "Evaluation", "Completed", "Certificate"];
 
 export function JourneyStepper({ status, allocationStatus, hasCertificate = false }: { status: string; allocationStatus?: string; hasCertificate?: boolean }) {
-  const inP2 = ["allocated", "selected"].includes(status) || !!allocationStatus;
+  const inP2 = status === "allocated" || !!allocationStatus;
   const p1Idx = status === "rejected" ? -1 : Math.max(0, P1.indexOf(status));
   let p2Idx = -1;
   if (hasCertificate) p2Idx = 4;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bell, MessageSquare, Send } from "lucide-react";
+import { Bell, MessageSquare, Search, Send } from "lucide-react";
 import { Avatar, EmptyState, useToast } from "./ui";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
@@ -19,13 +19,15 @@ export const dueIn = (s?: string) => {
   return `Due in ${days}d`;
 };
 
-export function MessagesPanel({ empty = "No conversations yet." }: { empty?: string }) {
+export function MessagesPanel({ empty = "No conversations yet.", directoryMode = "" }: { empty?: string; directoryMode?: "admin" | "company" | "" }) {
   const { user } = useAuth();
   const toast = useToast();
   const [threads, setThreads] = useState<any[]>([]);
   const [active, setActive] = useState("");
   const [text, setText] = useState("");
   const [typing, setTyping] = useState("");
+  const [people, setPeople] = useState<any[]>([]);
+  const [personSearch, setPersonSearch] = useState("");
   const typeTimer = useRef<any>(null);
   const activeRef = useRef("");
   activeRef.current = active;
@@ -50,6 +52,10 @@ export function MessagesPanel({ empty = "No conversations yet." }: { empty?: str
     } catch {}
   };
   useEffect(() => { load(); const i = setInterval(load, 15000); return () => clearInterval(i); }, []);
+  useEffect(() => {
+    if (!directoryMode) return;
+    (directoryMode === "admin" ? api.users() : api.messageContacts()).then((rows: any[]) => setPeople(rows)).catch(() => setPeople([]));
+  }, [directoryMode]);
 
   const cur = threads.find((t) => t._id === active);
   const send = async () => {
@@ -61,12 +67,33 @@ export function MessagesPanel({ empty = "No conversations yet." }: { empty?: str
     } catch { toast("error", "Could not send — is the server running?"); }
   };
 
-  if (!threads.length)
+  const startChat = async (person: any) => {
+    try {
+      const thread = await api.startThread({ recipientId: person._id, subject: `Direct chat · ${person.name}` });
+      await load();
+      setActive(thread._id);
+      setPersonSearch("");
+    } catch { toast("error", "Could not start conversation."); }
+  };
+
+  const visiblePeople = people.filter((p) => {
+    const q = personSearch.trim().toLowerCase();
+    return !q || `${p.name} ${p.email} ${p.role}`.toLowerCase().includes(q);
+  });
+
+  if (!threads.length && !directoryMode)
     return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<MessageSquare size={22} />} title="No conversations" body={empty} /></div>;
 
   return (
-    <div className="grid md:grid-cols-[260px_1fr] gap-4 h-[560px]">
+    <div className="grid md:grid-cols-[280px_1fr] gap-4 h-[600px]">
       <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-2.5 space-y-1.5 overflow-y-auto">
+        {directoryMode && <div className="sticky top-0 bg-white dark:bg-card pb-2 z-10">
+          <div className="relative"><Search size={14} className="absolute left-3 top-3 text-slate-400" /><input value={personSearch} onChange={(e) => setPersonSearch(e.target.value)} placeholder="Find anyone…" className="field-light w-full pl-9 pr-3 py-2.5 text-sm" /></div>
+          {personSearch && <div className="mt-2 space-y-1 max-h-48 overflow-y-auto border-b border-slate-100 dark:border-white/5 pb-2">
+            {visiblePeople.slice(0, 12).map((p) => <button key={p._id} onClick={() => startChat(p)} className="w-full flex items-center gap-2 p-2 rounded-lg text-left hover:bg-slate-50 dark:hover:bg-white/5"><Avatar name={p.name} avatar={p.avatar} color={p.color} size={30} /><span className="min-w-0"><span className="block text-xs font-bold truncate text-slate-900 dark:text-cream">{p.name}</span><span className="block text-[10px] text-slate-500 dark:text-cream-dim truncate">{p.role} · {p.email}</span></span></button>)}
+            {!visiblePeople.length && <p className="text-xs text-slate-400 p-2">No users found.</p>}
+          </div>}
+        </div>}
         {threads.map((t) => (
           <button key={t._id} onClick={() => setActive(t._id)}
             className={`w-full flex items-center gap-2.5 p-2.5 rounded-xl text-left transition ${active === t._id ? "bg-violet-100 dark:bg-violet-500/15" : "hover:bg-slate-50 dark:hover:bg-white/5"}`}>
@@ -115,7 +142,7 @@ export function NotifsPanel() {
     try { id ? await api.readNotif(id) : await api.readAllNotifs(); load(); } catch {}
   };
   return (
-    <div className="max-w-2xl space-y-3">
+    <div className="w-full max-w-none space-y-3">
       <div className="flex justify-end">
         <button onClick={() => read()} className="text-sm font-bold text-violet-600 dark:text-violet-300 hover:text-violet-800 dark:hover:text-violet-200">Mark all as read</button>
       </div>

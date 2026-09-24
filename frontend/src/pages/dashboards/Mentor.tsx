@@ -26,8 +26,9 @@ export default function Mentor() {
 
   const load = async () => {
     const r = await safe(() => api.overview(), mockMentorOverview);
-    setOv(r.data);
-    if (!sel && (r.data.allocations || [])[0]) setSel((r.data.allocations as any[])[0]._id);
+    const data = { ...r.data, allocations: r.data.allocations || r.data.interns || [] };
+    setOv(data);
+    if (!sel && data.allocations[0]) setSel(data.allocations[0]._id);
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
@@ -225,11 +226,11 @@ function Interns({ ov, sel, setSel, reload, sub0 }: any) {
         ))}
       </div>
 
-      {sub === "updates" && <ReviewUpdates items={(detail?.updates || []).filter((u: any) => !u.reviewStatus)} reload={() => { api.allocation(cur._id).then(setDetail).catch(() => {}); reload(); }} />}
+      {sub === "updates" && <ReviewUpdates items={detail?.updates || []} reload={() => { api.allocation(cur._id).then(setDetail).catch(() => {}); reload(); }} />}
       {sub === "tasks" && <ReviewTasks items={(detail?.tasks || []).filter((t: any) => t.status === "review")} aid={cur._id} reload={() => { api.allocation(cur._id).then(setDetail).catch(() => {}); reload(); }} />}
       {sub === "attendance" && <AttTable rows={detail?.attendance || []} />}
       {sub === "milestones" && <MilestonesEditor aid={cur._id} items={detail?.milestones || []} reload={() => { api.allocation(cur._id).then(setDetail).catch(() => {}); reload(); }} />}
-      {sub === "feedback" && <FeedbackForm aid={cur._id} />}
+      {sub === "feedback" && <FeedbackForm aid={cur._id} items={detail?.feedback || []} reload={() => { api.allocation(cur._id).then(setDetail).catch(() => {}); reload(); }} />}
       {sub === "sessions" && <SessionsPanel allocationId={cur._id} role="mentor" />}
     </div>
   );
@@ -238,21 +239,35 @@ function Interns({ ov, sel, setSel, reload, sub0 }: any) {
 export function ReviewUpdates({ items, reload }: any) {
   const toast = useToast();
   const [comment, setComment] = useState<Record<string, string>>({});
-  if (!items.length) return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<Clock size={22} />} title="All caught up" body="No daily updates waiting for review." /></div>;
+  const [localItems, setLocalItems] = useState<any[]>(items);
+  const [busy, setBusy] = useState<Record<string, boolean>>({});
+  useEffect(() => { setLocalItems(items); }, [items]);
+  if (!localItems.length) return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<Clock size={22} />} title="All caught up" body="No daily updates waiting for review." /></div>;
   const act = async (id: string, ok: boolean) => {
+    const previous = localItems.find((item) => item._id === id);
+    const nextStatus = ok ? "approved" : "returned";
+    setBusy((p) => ({ ...p, [id]: true }));
+    setLocalItems((current) => current.map((item) => item._id === id
+      ? { ...item, reviewStatus: nextStatus, mentorComment: comment[id] || "" }
+      : item));
+    toast("info", ok ? "Update marked completed." : "Update marked for rework.");
     try {
-      await api.reviewUpdate(id, { approved: ok, comment: comment[id] || "" });
-      toast("success", ok ? "Update approved." : "Update sent back with feedback.");
+      await api.reviewUpdate(id, { reviewStatus: ok ? "approved" : "returned", mentorComment: comment[id] || "" });
       reload();
-    } catch { toast("error", "Could not review — is the server running?"); }
+    } catch {
+      if (previous) setLocalItems((current) => current.map((item) => item._id === id ? previous : item));
+      toast("error", "Could not review — is the server running?");
+    } finally { setBusy((p) => ({ ...p, [id]: false })); }
   };
   return (
     <div className="space-y-3">
-      {items.map((u: any) => (
+      {localItems.map((u: any) => (
         <div key={u._id} className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <p className="font-extrabold text-slate-900 dark:text-cream">{u.studentName || ""} <span className="text-sm font-medium text-slate-400 dark:text-cream-dim/70 tabular">· {fmt(u.date)}{u.hours ? ` · ${u.hours}h` : ""}</span></p>
-            <Badge tone="amber">Needs review</Badge>
+            <Badge tone={u.reviewStatus === "approved" ? "green" : u.reviewStatus === "returned" ? "red" : "amber"}>
+              {u.reviewStatus === "approved" ? "Completed" : u.reviewStatus === "returned" ? "Returned" : "Needs review"}
+            </Badge>
           </div>
           <div className="mt-2.5 space-y-1.5 text-sm">
             <p><b className="text-slate-700 dark:text-cream-dim">Worked on:</b> <span className="text-slate-600 dark:text-cream-dim">{u.workedOn}</span></p>
@@ -260,12 +275,13 @@ export function ReviewUpdates({ items, reload }: any) {
             {u.learned && <p><b className="text-slate-700 dark:text-cream-dim">Learned:</b> <span className="text-slate-600 dark:text-cream-dim">{u.learned}</span></p>}
             {u.blockers && <p><b className="text-slate-700 dark:text-cream-dim">Blockers:</b> <span className="text-slate-600 dark:text-cream-dim">{u.blockers}</span></p>}
           </div>
-          <div className="flex gap-2 mt-3">
+          {(!u.reviewStatus || u.reviewStatus === "pending") && <div className="flex gap-2 mt-3">
             <input value={comment[u._id] || ""} onChange={(e) => setComment((p) => ({ ...p, [u._id]: e.target.value }))}
               placeholder="Feedback comment (optional)…" className="field-light flex-1 px-3.5 py-2.5 text-sm" />
-            <button onClick={() => act(u._id, true)} className="btn-hero px-4 py-2.5 bg-emerald-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><Check size={15} /> Approve</button>
-            <button onClick={() => act(u._id, false)} className="btn-hero px-4 py-2.5 bg-rose-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><XCircle size={15} /> Return</button>
-          </div>
+            <button disabled={busy[u._id]} onClick={() => act(u._id, true)} className="btn-hero px-4 py-2.5 bg-emerald-500 text-white text-sm font-cabin inline-flex items-center gap-1.5 disabled:opacity-60"><Check size={15} /> Approve</button>
+            <button disabled={busy[u._id]} onClick={() => act(u._id, false)} className="btn-hero px-4 py-2.5 bg-rose-500 text-white text-sm font-cabin inline-flex items-center gap-1.5 disabled:opacity-60"><XCircle size={15} /> Return</button>
+          </div>}
+          {u.mentorComment && <p className="mt-3 text-sm text-slate-500 dark:text-cream-dim"><b>Mentor feedback:</b> {u.mentorComment}</p>}
         </div>
       ))}
     </div>
@@ -275,6 +291,7 @@ export function ReviewUpdates({ items, reload }: any) {
 export function ReviewTasks({ items, aid, reload }: any) {
   const toast = useToast();
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   if (!items.length && !aid) return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<LayoutGrid size={22} />} title="Nothing in review" body="Tasks your interns submit will land here." /></div>;
   const act = async (t: any, ok: boolean) => {
     try {
@@ -285,15 +302,18 @@ export function ReviewTasks({ items, aid, reload }: any) {
   };
   const add = async () => {
     if (!title.trim()) return;
-    try { await api.createTask(aid, { title: title.trim(), assignedBy: "mentor" }); setTitle(""); reload(); toast("success", "Task assigned."); }
+    try { await api.createTask(aid, { title: title.trim(), description: description.trim(), assignedBy: "mentor" }); setTitle(""); setDescription(""); reload(); toast("success", "Task assigned."); }
     catch { toast("error", "Could not assign — is the server running?"); }
   };
   return (
     <div className="space-y-3">
       {aid && (
-        <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-4 flex gap-2">
-          <Input tone="light" placeholder="Assign a new task…" value={title} onChange={(e: any) => setTitle(e.target.value)} />
-          <button onClick={add} className="btn-hero px-5 py-2.5 bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a] text-sm font-cabin whitespace-nowrap">Assign</button>
+        <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-4 space-y-2">
+          <div className="flex gap-2 items-end">
+            <Input tone="light" label="Task name" placeholder="e.g. Build the API endpoint" value={title} onChange={(e: any) => setTitle(e.target.value)} />
+            <button onClick={add} className="btn-hero px-5 py-2.5 bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a] text-sm font-cabin whitespace-nowrap">Assign</button>
+          </div>
+          <TextArea tone="light" label="Task details" placeholder="Describe the expected work, deliverables, or acceptance criteria…" value={description} onChange={(e: any) => setDescription(e.target.value)} />
         </div>
       )}
       {items.map((t: any) => (
@@ -303,8 +323,13 @@ export function ReviewTasks({ items, aid, reload }: any) {
             <p className="text-xs text-slate-500 dark:text-cream-dim mt-0.5">{t.studentName || ""} {t.dueDate && `· Due ${fmt(t.dueDate)}`}</p>
             {t.description && <p className="text-sm text-slate-500 dark:text-cream-dim mt-1">{t.description}</p>}
           </div>
-          <button onClick={() => act(t, true)} className="btn-hero px-4 py-2 bg-emerald-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><Check size={15} /> Approve</button>
-          <button onClick={() => act(t, false)} className="btn-hero px-4 py-2 bg-rose-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><XCircle size={15} /> Rework</button>
+          {t.status === "completed" ? <Badge tone="green"><Check size={13} className="inline mr-1" /> Completed</Badge> : (
+            <>
+              <Badge tone={t.status === "review" ? "amber" : "slate"}>{t.status.replace("_", " ")}</Badge>
+              {t.status === "review" && <button onClick={() => act(t, true)} className="btn-hero px-4 py-2 bg-emerald-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><Check size={15} /> Approve</button>}
+              {t.status === "review" && <button onClick={() => act(t, false)} className="btn-hero px-4 py-2 bg-rose-500 text-white text-sm font-cabin inline-flex items-center gap-1.5"><XCircle size={15} /> Rework</button>}
+            </>
+          )}
         </div>
       ))}
     </div>
@@ -372,53 +397,76 @@ function MilestonesEditor({ aid, items, reload }: any) {
   );
 }
 
-function FeedbackForm({ aid }: any) {
+function FeedbackForm({ aid, items, reload }: any) {
   const toast = useToast();
   const [f, setF] = useState({ technical: 4, communication: 4, punctuality: 4, comments: "" });
-  const [done, setDone] = useState(false);
   const set = (k: string, v: any) => setF((p) => ({ ...p, [k]: v }));
   const submit = async () => {
     try {
       await api.mentorFeedback(aid, f);
-      setDone(true);
+      setF({ technical: 4, communication: 4, punctuality: 4, comments: "" });
+      reload();
       toast("success", "Feedback submitted.");
     } catch { toast("error", "Could not submit — is the server running?"); }
   };
-  if (done) return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<Award size={22} />} title="Feedback submitted" body="Thanks — your evaluation is recorded and the company has been notified." /></div>;
   return (
-    <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5 max-w-xl space-y-4">
-      <p className="font-extrabold text-slate-900 dark:text-cream">Fortnightly feedback</p>
-      {(["technical", "communication", "punctuality"] as const).map((k) => (
-        <div key={k} className="flex items-center gap-3">
-          <span className="w-32 text-sm font-bold text-slate-600 dark:text-cream-dim capitalize">{k}</span>
-          <div className="flex gap-1.5">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button key={n} onClick={() => set(k, n)}>
-                <Star size={22} className={n <= (f as any)[k] ? "fill-amber-400 text-amber-400" : "text-slate-300 dark:text-white/40"} />
-              </button>
-            ))}
+    <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-5 items-start">
+      <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5 space-y-4">
+        <p className="font-extrabold text-slate-900 dark:text-cream">Fortnightly feedback</p>
+        {(["technical", "communication", "punctuality"] as const).map((k) => (
+          <div key={k} className="flex items-center gap-3">
+            <span className="w-32 text-sm font-bold text-slate-600 dark:text-cream-dim capitalize">{k}</span>
+            <div className="flex gap-1.5">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} onClick={() => set(k, n)}>
+                  <Star size={22} className={n <= (f as any)[k] ? "fill-amber-400 text-amber-400" : "text-slate-300 dark:text-white/40"} />
+                </button>
+              ))}
+            </div>
           </div>
+        ))}
+        <TextArea tone="light" label="Comments" value={f.comments} onChange={(e: any) => set("comments", e.target.value)} />
+        <button onClick={submit} className="btn-hero w-full py-2.5 bg-primary text-white text-sm font-cabin">Submit Feedback</button>
+      </div>
+      <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
+        <p className="font-extrabold text-slate-900 dark:text-cream mb-3">Past feedback ({items.length})</p>
+        <div className="space-y-3">
+          {items.map((item: any) => (
+            <div key={item._id} className="rounded-xl border border-slate-200 dark:border-white/10 p-3.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-bold text-slate-900 dark:text-cream">{item.fromName || "Mentor feedback"}</p>
+                <span className="text-xs text-slate-500 dark:text-cream-dim">{fmt(item.createdAt)}</span>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-slate-600 dark:text-cream-dim">
+                <span>Technical: <b>{item.technical || 0}/5</b></span>
+                <span>Communication: <b>{item.communication || 0}/5</b></span>
+                <span>Punctuality: <b>{item.punctuality || 0}/5</b></span>
+              </div>
+              {item.message && <p className="text-sm text-slate-600 dark:text-cream-dim mt-2">{item.message}</p>}
+            </div>
+          ))}
+          {items.length === 0 && <p className="text-sm text-slate-400 dark:text-cream-dim/70">No feedback has been sent yet.</p>}
         </div>
-      ))}
-      <TextArea tone="light" label="Comments" value={f.comments} onChange={(e: any) => set("comments", e.target.value)} />
-      <button onClick={submit} className="btn-hero w-full py-2.5 bg-primary text-white text-sm font-cabin">Submit Feedback</button>
+      </div>
     </div>
   );
 }
 
 function Reviews({ ov, reload, pick }: any) {
   const ups = ov.reviewQueue?.updates || [];
+  const allUpdates = ov.updateHistory || ups;
   const tks = ov.reviewQueue?.tasks || [];
+  const allTasks = ov.taskHistory || tks;
   return (
     <div className="grid lg:grid-cols-2 gap-5 items-start">
       <div>
-        <p className="font-extrabold text-slate-900 dark:text-cream mb-3 flex items-center gap-2"><Clock size={16} /> Daily updates ({ups.length})</p>
-        <ReviewUpdates items={ups} reload={reload} />
-        {ups.length > 0 && <button onClick={() => pick(ups[0].allocationId)} className="text-xs font-bold text-violet-600 dark:text-violet-300 mt-2">Open intern →</button>}
+        <p className="font-extrabold text-slate-900 dark:text-cream mb-3 flex items-center gap-2"><Clock size={16} /> Daily updates ({allUpdates.length}) <span className="text-xs font-medium text-slate-500 dark:text-cream-dim">{ups.length} awaiting review</span></p>
+        <ReviewUpdates items={allUpdates} reload={reload} />
+        {allUpdates.length > 0 && <button onClick={() => pick(allUpdates[0].allocationId)} className="text-xs font-bold text-violet-600 dark:text-violet-300 mt-2">Open intern →</button>}
       </div>
       <div>
-        <p className="font-extrabold text-slate-900 dark:text-cream mb-3 flex items-center gap-2"><LayoutGrid size={16} /> Tasks in review ({tks.length})</p>
-        <ReviewTasks items={tks} aid={tks[0]?.allocationId} reload={reload} />
+        <p className="font-extrabold text-slate-900 dark:text-cream mb-3 flex items-center gap-2"><LayoutGrid size={16} /> Tasks ({allTasks.length}) <span className="text-xs font-medium text-slate-500 dark:text-cream-dim">{tks.length} awaiting review</span></p>
+        <ReviewTasks items={allTasks} aid={tks[0]?.allocationId || allTasks[0]?.allocationId} reload={reload} />
       </div>
     </div>
   );

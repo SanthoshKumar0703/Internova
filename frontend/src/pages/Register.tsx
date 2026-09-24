@@ -47,7 +47,7 @@ export default function Register() {
   const nav = useNavigate();
   const toast = useToast();
   const { login } = useAuth();
-  const [role, setRole] = useState<"student" | "company">("student");
+  const [role, setRole] = useState<"student" | "company" | "mentor">("student");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
@@ -100,6 +100,7 @@ export default function Register() {
           <div className="grid grid-cols-2 gap-3">
             {[
               { id: "student", icon: <GraduationCap size={20} />, t: "Student", d: "Find & grow" },
+              { id: "mentor", icon: <GraduationCap size={20} />, t: "Mentor", d: "Guide interns" },
               { id: "company", icon: <Building2 size={20} />, t: "Company", d: "Hire & mentor" },
             ].map((r) => (
               <button key={r.id} type="button" onClick={() => setRole(r.id as any)}
@@ -132,7 +133,7 @@ export default function Register() {
               <Input label="Confirm Password" type={show ? "text" : "password"} placeholder="Repeat it" value={pw2} onChange={(e: any) => setPw2(e.target.value)} autoComplete="new-password" />
             </div>
             <button disabled={busy} className="btn-hero w-full py-3 bg-primary btn-primary-glow text-white disabled:opacity-60">
-              {busy ? "Creating account…" : `Create ${role === "student" ? "Student" : "Company"} Account`}
+              {busy ? "Creating account…" : `Create ${role === "student" ? "Student" : role === "mentor" ? "Mentor" : "Company"} Account`}
             </button>
           </form>
           <p className="text-center text-sm text-slate-500 dark:text-cream-dim mt-6">

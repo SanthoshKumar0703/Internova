@@ -9,7 +9,6 @@ const KINDS = ["Resume", "Offer Letter", "ID Proof", "Report", "Certificate", "O
 export default function SDocuments({ allocationId = "" }: { allocationId?: string }) {
   const { user, setUser } = useAuth();
   const toast = useToast();
-  const [resume, setResume] = useState<any>(null);
   const [docs, setDocs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -18,38 +17,12 @@ export default function SDocuments({ allocationId = "" }: { allocationId?: strin
 
   const load = async () => {
     try {
-      const [r, d] = await Promise.all([
-        api.myResume().catch(() => null),
-        api.documents(allocationId ? { allocationId } : {}).catch(() => []),
-      ]);
-      setResume(r);
+      const d = await api.documents(allocationId ? { allocationId } : {}).catch(() => []);
       setDocs(d || []);
     } catch {}
     setLoading(false);
   };
   useEffect(() => { load(); }, [allocationId]);
-
-  const uploadResume = async (f: File | undefined) => {
-    if (!f) return;
-    setBusy(true);
-    try {
-      const r = await api.uploadResume(f);
-      setResume(r);
-      toast("success", `Resume parsed — ${r.skills?.length || 0} skills detected.`);
-      load();
-    } catch (e: any) { toast("error", e.detail || "Upload failed."); }
-    finally { setBusy(false); }
-  };
-
-  const applySkills = async () => {
-    if (!resume?.skills?.length) return;
-    const merged = Array.from(new Set([...(user?.skills || []), ...resume.skills]));
-    try {
-      const u = await api.patchUser(user!._id, { skills: merged });
-      setUser(u);
-      toast("success", "Profile skills updated from resume.");
-    } catch { toast("error", "Could not update profile."); }
-  };
 
   const uploadDoc = async (f: File | undefined) => {
     if (!f) return;
@@ -67,44 +40,6 @@ export default function SDocuments({ allocationId = "" }: { allocationId?: strin
 
   return (
     <div className="space-y-5 max-w-3xl">
-      <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
-        <p className="font-extrabold text-slate-900 dark:text-cream flex items-center gap-2"><FileText size={17} className="text-violet-600 dark:text-violet-300" /> Resume</p>
-        <p className="text-xs text-slate-500 dark:text-cream-dim mt-1">Upload a PDF, DOCX or TXT resume — InterNova extracts your skills automatically.</p>
-        {resume ? (
-          <div className="mt-4 rounded-2xl border border-violet-200 dark:border-violet-400/30 bg-violet-50/60 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <p className="font-bold text-sm text-slate-900 dark:text-cream">{resume.filename}</p>
-              <a href={resume.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs font-bold text-violet-600 dark:text-violet-300 hover:text-violet-800 dark:hover:text-violet-200">
-                <Download size={13} /> Download
-              </a>
-            </div>
-            {(resume.skills || []).length > 0 && (
-              <>
-                <p className="text-xs font-bold text-slate-500 dark:text-cream-dim mt-3 mb-1.5 flex items-center gap-1"><Sparkles size={12} /> Detected skills ({resume.skills.length})</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {resume.skills.map((s: string) => (
-                    <span key={s} className="text-[11px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 font-semibold">{s}</span>
-                  ))}
-                </div>
-                <button onClick={applySkills} className="btn-hero mt-3 px-4 py-2 bg-primary text-white text-[13px] font-cabin">Apply skills to my profile</button>
-              </>
-            )}
-            {resume.preview && (
-              <details className="mt-3 text-xs text-slate-500 dark:text-cream-dim">
-                <summary className="cursor-pointer font-bold">Extracted text preview</summary>
-                <p className="mt-1.5 whitespace-pre-wrap leading-relaxed">{resume.preview.slice(0, 500)}…</p>
-              </details>
-            )}
-          </div>
-        ) : (
-          <p className="text-sm text-slate-400 dark:text-cream-dim/70 mt-3">No resume uploaded yet.</p>
-        )}
-        <label className="btn-hero mt-4 inline-flex items-center gap-1.5 px-5 py-2.5 bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a] text-sm font-cabin cursor-pointer">
-          <Upload size={15} /> {busy ? "Uploading…" : resume ? "Replace resume" : "Upload resume"}
-          <input type="file" accept=".pdf,.docx,.txt,.md" className="hidden" disabled={busy}
-            onChange={(e) => { uploadResume(e.target.files?.[0]); e.target.value = ""; }} />
-        </label>
-      </div>
 
       <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
         <p className="font-extrabold text-slate-900 dark:text-cream">Documents</p>

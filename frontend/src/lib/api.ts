@@ -96,7 +96,14 @@ export interface User {
   degree?: string;
   year?: string;
   cgpa?: string;
+  education?: string[];
+  projects?: string[];
+  experience?: string[];
+  certifications?: string[];
+  interests?: string[];
+  preferredRoles?: string[];
   resumeName?: string;
+  resumeUrl?: string;
   profileComplete?: boolean;
   expertise?: string[];
   experience?: string;
@@ -202,6 +209,8 @@ export const api = {
   readAllNotifs: () => req("/notifications/read-all", post()),
 
   threads: () => req("/messages/threads"),
+  messageContacts: () => req("/messages/contacts"),
+  startThread: (b: { recipientId: string; subject?: string }) => req("/messages/threads", post(b)),
   sendMessage: (tid: string, text: string) => req(`/messages/${tid}`, post({ text })),
 
   overview: () => req("/dashboard/overview"),
@@ -230,6 +239,7 @@ export const api = {
   allocate: (b: any) => req("/allocations", { method: "POST", body: JSON.stringify(b) }),
   recommended: () => req("/match/recommended"),
   rankApps: (id: string) => req(`/match/rank?internshipId=${id}`),
+  mentorMatches: (id: string) => req(`/match/mentors?internshipId=${id}`),
   announcements: () => req("/announcements"),
   postAnnouncement: (b: any) => req("/admin/announcements", { method: "POST", body: JSON.stringify(b) }),
   presence: () => req("/presence"),

@@ -18,9 +18,7 @@ import AdminReports from "./admin/Reports";
 
 const TABS = [
   ["overview", "Overview", <Home key="h" size={20} />],
-  ["students", "Students", <GraduationCap key="s" size={20} />],
-  ["mentors", "Mentors", <Users key="m" size={20} />],
-  ["companies", "Companies", <Building2 key="c" size={20} />],
+  ["users", "Users", <Users key="u" size={20} />],
   ["internships", "Internships", <Briefcase key="i" size={20} />],
   ["applications", "Applications", <Inbox key="a" size={20} />],
   ["allocations", "Allocations", <FileText key="f" size={20} />],
@@ -49,9 +47,7 @@ export default function Admin() {
 
   const titles: Record<string, [string, string]> = {
     overview: ["Mission Control", "Every student, mentor, company and certificate — live."],
-    students: ["Students", `${(ov.users?.students || []).length} registered learners.`],
-    mentors: ["Mentors", "Guides who shape every internship."],
-    companies: ["Companies", "Verified hiring partners."],
+    users: ["Users", "Students, mentors and companies in one place."],
     internships: ["Internships", "Every role on the platform."],
     applications: ["Applications", "The full hiring pipeline."],
     allocations: ["Allocations", "Active and completed internships."],
@@ -67,22 +63,18 @@ export default function Admin() {
 
   return (
     <DashShell roleLabel="Admin" nav={nav} active={tab} onNav={setTab} title={title} subtitle={subtitle} thin compactNav
-      actions={tab === "mentors" ? (
-        <button onClick={() => setMentorOpen(true)} className="btn-hero inline-flex items-center gap-1.5 px-4 py-2 bg-primary text-white text-sm font-cabin"><Plus size={15} /> Add Mentor</button>
-      ) : undefined}>
+      actions={undefined}>
       {loading ? <div className="grid place-items-center py-24"><Spinner light /></div> : (
         <>
           {tab === "overview" && <AOverview ov={ov} go={setTab} onMentor={() => setMentorOpen(true)} />}
-          {tab === "students" && <UsersTable role="students" title="Students" icon={<GraduationCap size={20} />} />}
-          {tab === "mentors" && <UsersTable role="mentors" title="Mentors" icon={<Users size={20} />} onAdd={() => setMentorOpen(true)} />}
-          {tab === "companies" && <UsersTable role="companies" title="Companies" icon={<Building2 size={20} />} />}
+          {tab === "users" && <UsersTable />}
           {tab === "internships" && <InternshipsTable />}
           {tab === "applications" && <ApplicationsTable />}
           {tab === "allocations" && <AllocationsTable />}
           {tab === "certificates" && <CertificatesTable />}
           {tab === "reports" && <AdminReports />}
           {tab === "activity" && <ActivityFeed />}
-          {tab === "messages" && <MessagesPanel empty="Admin conversations will appear here." />}
+          {tab === "messages" && <MessagesPanel directoryMode="admin" empty="Admin conversations will appear here." />}
           {tab === "notifications" && <NotifsPanel />}
           {tab === "settings" && <SettingsSec />}
         </>
@@ -163,13 +155,14 @@ function AOverview({ ov, go, onMentor }: any) {
   );
 }
 
-function UsersTable({ role, title, icon, onAdd }: any) {
+function UsersTable() {
   const toast = useToast();
   const [items, setItems] = useState<any[]>([]);
   const [q, setQ] = useState("");
+  const [role, setRole] = useState("all");
 
   const load = async () => {
-    try { setItems(await api.adminUsers(role)); } catch { setItems([]); }
+    try { setItems(await api.adminUsers(role === "all" ? "" : role)); } catch { setItems([]); }
   };
   useEffect(() => { load(); }, [role]);
 
@@ -187,11 +180,11 @@ function UsersTable({ role, title, icon, onAdd }: any) {
   return (
     <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden">
       <div className="flex flex-wrap items-center gap-3 p-4 border-b border-slate-100 dark:border-white/5">
-        <span className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-500/15 text-violet-600 dark:text-violet-300 grid place-items-center">{icon}</span>
-        <p className="font-extrabold text-slate-900 dark:text-cream">{title} <span className="text-sm font-medium text-slate-400 dark:text-cream-dim/70 tabular">({items.length})</span></p>
-        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Search ${title.toLowerCase()}…`}
+        <span className="w-9 h-9 rounded-xl bg-violet-100 dark:bg-violet-500/15 text-violet-600 dark:text-violet-300 grid place-items-center"><Users size={20} /></span>
+        <p className="font-extrabold text-slate-900 dark:text-cream">Users <span className="text-sm font-medium text-slate-400 dark:text-cream-dim/70 tabular">({items.length})</span></p>
+        <Select value={role} onChange={(e: any) => setRole(e.target.value)} options={["all", "student", "mentor", "company"]} className="w-36" />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search users…"
           className="field-light ml-auto px-3.5 py-2 text-sm w-56" />
-        {onAdd && <button onClick={onAdd} className="btn-hero px-4 py-2 bg-primary text-white text-sm font-cabin">+ Add</button>}
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm min-w-[720px]">
@@ -206,7 +199,7 @@ function UsersTable({ role, title, icon, onAdd }: any) {
           </thead>
           <tbody>
             {filtered.map((u: any) => (
-              <tr key={u._id} className="border-b border-slate-50 hover:bg-slate-50/60">
+              <tr key={u._id} className="border-b border-slate-50 hover:bg-violet-50/70 dark:hover:bg-white/5 transition-colors focus-within:bg-violet-50/70">
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-2.5">
                     <Avatar name={u.name} avatar={u.avatar} color={u.color} size={34} />
@@ -215,12 +208,12 @@ function UsersTable({ role, title, icon, onAdd }: any) {
                 </td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim text-[13px]">{u.email}<br />{u.phone || "—"}</td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim text-[13px]">
-                  {role === "students" && <>{u.college || "—"} · {(u.skills || []).slice(0, 3).join(", ")}</>}
-                  {role === "mentors" && <>{(u.expertise || []).join(", ") || "—"} · {u.mentees ?? 0} mentees</>}
-                  {role === "companies" && <>{u.industry || "—"} · {u.location || "—"}</>}
+                  {u.role === "student" && <>{u.college || "—"} · {(u.skills || []).slice(0, 3).join(", ")}</>}
+                  {u.role === "mentor" && <>{(u.expertise || []).join(", ") || "—"} · {u.mentees ?? 0} mentees</>}
+                  {u.role === "company" && <>{u.industry || u.company?.industry || "—"} · {u.location || u.company?.location || "—"}</>}
                 </td>
                 <td className="px-4 py-3">
-                  {role === "companies"
+                  {u.role === "company"
                     ? <Badge tone={u.verified ? "green" : "amber"}>{u.verified ? "Verified" : "Pending"}</Badge>
                     : <Badge tone={u.suspended ? "red" : "green"}>{u.suspended ? "Suspended" : "Active"}</Badge>}
                 </td>
@@ -229,7 +222,7 @@ function UsersTable({ role, title, icon, onAdd }: any) {
                     {role === "companies" && !u.verified && (
                       <button onClick={() => save(u, { verified: true })} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">Verify</button>
                     )}
-                    {role !== "companies" && (
+                    {u.role !== "company" && (
                       <button onClick={() => save(u, { suspended: !u.suspended })}
                         className={`text-xs font-bold px-3 py-1.5 rounded-lg ${u.suspended ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300" : "bg-rose-100 dark:bg-rose-500/15 text-rose-600 dark:text-rose-300"}`}>
                         {u.suspended ? "Unsuspend" : "Suspend"}
@@ -242,30 +235,64 @@ function UsersTable({ role, title, icon, onAdd }: any) {
           </tbody>
         </table>
       </div>
-      {filtered.length === 0 && <EmptyState icon={<Users size={22} />} title={`No ${title.toLowerCase()}`} body="They'll show up here once registered." />}
+      {filtered.length === 0 && <EmptyState icon={<Users size={22} />} title="No users found" body="Users will appear here once registered." />}
     </div>
   );
 }
 
 function InternshipsTable() {
+  const toast = useToast();
   const [items, setItems] = useState<any[]>([]);
-  useEffect(() => { api.internships({}).then(setItems).catch(() => setItems([])); }, []);
+  const load = () => { api.internships({}).then(setItems).catch(() => setItems([])); };
+  useEffect(() => { load(); }, []);
+
+  const decide = async (it: any, status: "open" | "rejected" | "closed") => {
+    try {
+      const approvalNote = status === "open"
+        ? "Approved by admin"
+        : status === "rejected"
+          ? "Rejected by admin"
+          : "Removed by admin from public listings";
+      await api.updateInternship(it._id, { status, approvalNote });
+      toast("success", status === "open" ? "Internship approved." : status === "rejected" ? "Internship rejected." : "Internship removed from website.");
+      load();
+    } catch (e: any) { toast("error", e.detail || "Could not update internship."); }
+  };
+
   return (
     <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl overflow-hidden">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm min-w-[680px]">
+        <table className="w-full text-sm min-w-[760px]">
           <thead><tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 dark:text-cream-dim/70 border-b border-slate-100 dark:border-white/5">
             <th className="px-4 py-3 font-bold">Role</th><th className="px-4 py-3 font-bold">Company</th>
-            <th className="px-4 py-3 font-bold">Mode</th><th className="px-4 py-3 font-bold">Deadline</th><th className="px-4 py-3 font-bold">Status</th>
+            <th className="px-4 py-3 font-bold">Mode</th><th className="px-4 py-3 font-bold">Deadline</th>
+            <th className="px-4 py-3 font-bold">Status</th><th className="px-4 py-3 font-bold text-right">Actions</th>
           </tr></thead>
           <tbody>
             {items.map((it: any) => (
-              <tr key={it._id} className="border-b border-slate-50 hover:bg-slate-50/60">
-                <td className="px-4 py-3 font-bold text-slate-900 dark:text-cream">{it.title}</td>
+              <tr key={it._id} className="border-b border-slate-50 hover:bg-violet-50/70 dark:hover:bg-white/5 transition-colors align-top">
+                <td className="px-4 py-3 font-bold text-slate-900 dark:text-cream">{it.title}<div className="text-[11px] text-slate-400 mt-1">{it.domain}</div></td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{it.companyName}</td>
                 <td className="px-4 py-3"><Badge tone="purple">{it.mode}</Badge></td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim tabular">{fmt(it.deadline)}</td>
-                <td className="px-4 py-3"><Badge tone={it.status === "open" ? "green" : "slate"}>{it.status}</Badge></td>
+                <td className="px-4 py-3">
+                  <Badge tone={it.status === "open" ? "green" : it.status === "pending_approval" ? "amber" : it.status === "rejected" ? "red" : "slate"}>{it.status === "pending_approval" ? "Pending approval" : it.status}</Badge>
+                </td>
+                <td className="px-4 py-3">
+                  {it.status === "pending_approval" ? (
+                    <div className="flex justify-end gap-2 flex-wrap">
+                      <button onClick={() => decide(it, "open")} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/80">Approve</button>
+                      <button onClick={() => decide(it, "rejected")} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-rose-100 dark:bg-rose-500/15 text-rose-600 dark:text-rose-300 hover:bg-rose-200 dark:hover:bg-rose-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-400/80">Reject</button>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end gap-2 flex-wrap">
+                      {it.status !== "closed" && (
+                        <button onClick={() => decide(it, "closed")} className="text-xs font-bold px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-700/60 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400/80">Remove</button>
+                      )}
+                      <div className="text-right text-[11px] text-slate-400 dark:text-cream-dim self-center">{it.approvalNote || "Reviewed"}</div>
+                    </div>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -291,7 +318,7 @@ function ApplicationsTable() {
             {items.map((a: any) => {
               const st = APP_STATUS[a.status] || APP_STATUS.applied;
               return (
-                <tr key={a._id} className="border-b border-slate-50 hover:bg-slate-50/60">
+                <tr key={a._id} className="border-b border-slate-50 hover:bg-violet-50/70 dark:hover:bg-white/5 transition-colors focus-within:bg-violet-50/70">
                   <td className="px-4 py-3 font-bold text-slate-900 dark:text-cream">{a.student?.name}</td>
                   <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{a.internship?.title}</td>
                   <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{a.internship?.companyName}</td>
@@ -321,7 +348,7 @@ function AllocationsTable() {
           </tr></thead>
           <tbody>
             {items.map((a: any) => (
-              <tr key={a._id} className="border-b border-slate-50 hover:bg-slate-50/60">
+              <tr key={a._id} className="border-b border-slate-50 hover:bg-violet-50/70 dark:hover:bg-white/5 transition-colors focus-within:bg-violet-50/70">
                 <td className="px-4 py-3 font-bold text-slate-900 dark:text-cream">{a.student?.name}</td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{a.internship?.title}</td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{a.mentor?.name || "—"}</td>
@@ -350,7 +377,7 @@ function CertificatesTable() {
           </tr></thead>
           <tbody>
             {items.map((c: any) => (
-              <tr key={c._id} className="border-b border-slate-50 hover:bg-slate-50/60">
+              <tr key={c._id} className="border-b border-slate-50 hover:bg-violet-50/70 dark:hover:bg-white/5 transition-colors focus-within:bg-violet-50/70">
                 <td className="px-4 py-3 font-mono text-[13px] tabular">{c._id}</td>
                 <td className="px-4 py-3 font-bold text-slate-900 dark:text-cream">{c.studentName}</td>
                 <td className="px-4 py-3 text-slate-500 dark:text-cream-dim">{c.role}</td>

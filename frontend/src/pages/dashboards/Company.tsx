@@ -62,12 +62,12 @@ export default function Company() {
         <>
           {tab === "overview" && <COverview ov={ov} go={setTab} reload={load} />}
           {tab === "internships" && <Internships ov={ov} reload={load} />}
-          {tab === "applications" && <Applications ov={ov} reload={load} />}
+          {tab === "applications" && <Applications ov={ov} reload={load} monitor={(id: string) => { setSp({ tab: "monitoring", allocation: id }); window.scrollTo(0, 0); }} />}
           {tab === "monitoring" && <Monitoring ov={ov} go={setTab} />}
           {tab === "evaluations" && <Evaluations ov={ov} reload={load} />}
           {tab === "reports" && <CReports />}
           {tab === "profile" && <CompanyProfile reload={load} />}
-          {tab === "messages" && <MessagesPanel empty="Conversations with interns will appear here." />}
+          {tab === "messages" && <MessagesPanel directoryMode="company" empty="Conversations with your team will appear here." />}
           {tab === "notifications" && <NotifsPanel />}
         </>
       )}
@@ -153,6 +153,7 @@ function COverview({ ov, go, reload }: any) {
 function Internships({ ov, reload }: any) {
   const toast = useToast();
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<any>(null);
   const [f, setF] = useState({ title: "", domain: "", description: "", skills: "", mode: "Remote", location: "", duration: "", stipend: "", openings: 1, deadline: "", responsibilities: "" });
   const set = (k: string, v: any) => setF((p) => ({ ...p, [k]: v }));
 
@@ -180,7 +181,7 @@ function Internships({ ov, reload }: any) {
         {(ov.internships || []).map((it: any) => {
           const n = (ov.applications || []).filter((a: any) => a.internshipId === it._id).length;
           return (
-            <div key={it._id} className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
+            <button key={it._id} onClick={() => setSelected(it)} className="w-full text-left bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5 card-hover">
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <p className="font-extrabold text-slate-900 dark:text-cream">{it.title}</p>
@@ -193,11 +194,40 @@ function Internships({ ov, reload }: any) {
                 <span>{it.stipend} · {it.openings} openings</span>
                 <span className="tabular">Apply by {fmt(it.deadline)}</span>
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
       {(ov.internships || []).length === 0 && <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<Briefcase size={22} />} title="No roles yet" body="Post your first internship and meet ambitious students." /></div>}
+
+      <Modal open={!!selected} onClose={() => setSelected(null)} title={selected?.title || "Internship details"} wide>
+        {selected && (() => {
+          const count = (ov.applications || []).filter((a: any) => a.internshipId === selected._id).length;
+          return <div className="space-y-5">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-cream-dim">
+              <Badge tone={selected.status === "open" ? "green" : selected.status === "pending_approval" ? "amber" : "slate"}>{String(selected.status || "open").replace("_", " ")}</Badge>
+              <span>{selected.domain}</span><span>·</span><span>{count} applicants</span>
+            </div>
+            <p className="text-sm leading-6 text-slate-600 dark:text-cream-dim">{selected.description || "No description provided."}</p>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              {[["Mode", selected.mode], ["Location", selected.location], ["Duration", selected.duration], ["Stipend", selected.stipend || "Unpaid"], ["Openings", selected.openings], ["Apply by", fmt(selected.deadline)]].map(([label, value]) => (
+                <div key={label} className="rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 p-3">
+                  <p className="text-[11px] font-bold uppercase tracking-wide text-slate-400 dark:text-cream-dim/70">{label}</p>
+                  <p className="text-sm font-bold text-slate-800 dark:text-cream mt-1">{value || "—"}</p>
+                </div>
+              ))}
+            </div>
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500 dark:text-cream-dim">Required skills</p>
+              <div className="flex flex-wrap gap-1.5 mt-2">{(selected.skills || []).map((skill: string) => <Badge key={skill} tone="purple">{skill}</Badge>)}</div>
+            </div>
+            <div>
+              <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500 dark:text-cream-dim">Responsibilities</p>
+              <ul className="mt-2 space-y-2 text-sm text-slate-600 dark:text-cream-dim list-disc pl-5">{(selected.responsibilities || []).map((item: string) => <li key={item}>{item}</li>)}</ul>
+            </div>
+          </div>;
+        })()}
+      </Modal>
 
       <Modal open={open} onClose={() => setOpen(false)} title="Post a new internship" wide>
         <div className="grid md:grid-cols-2 gap-4">
@@ -219,11 +249,12 @@ function Internships({ ov, reload }: any) {
   );
 }
 
-function Applications({ ov, reload }: any) {
+function Applications({ ov, reload, monitor }: any) {
   const toast = useToast();
   const [filter, setFilter] = useState("");
   const [roster, setRoster] = useState<string[]>([]);
   const [rank, setRank] = useState<Record<string, any>>({});
+  const [mentorMatches, setMentorMatches] = useState<Record<string, any[]>>({});
   const [byMatch, setByMatch] = useState(false);
   const apps = (ov.applications || []).filter((a: any) => !filter || a.status === filter);
   const loadRank = async (iid: string) => {
@@ -232,14 +263,27 @@ function Applications({ ov, reload }: any) {
       setRank((p) => { const n = { ...p }; r.forEach((x: any) => { n[x.application._id] = x; }); return n; });
     } catch {}
   };
+  const loadMentorMatches = async (iid: string, appId: string) => {
+    try {
+      const r = await api.mentorMatches(iid);
+      setMentorMatches((p) => ({ ...p, [appId]: r }));
+    } catch {
+      setMentorMatches((p) => ({ ...p, [appId]: [] }));
+    }
+  };
   useEffect(() => { Array.from(new Set((ov.applications || []).map((a: any) => a.internshipId))).forEach((iid: any) => loadRank(iid)); }, [ov]);
+  useEffect(() => {
+    (ov.applications || []).forEach((a: any) => {
+      if (a.status === "accepted") loadMentorMatches(a.internshipId, a._id);
+    });
+  }, [ov.applications]);
   const shown = byMatch ? [...apps].sort((a, b) => (rank[b._id]?.score ?? -1) - (rank[a._id]?.score ?? -1)) : apps;
-  const mentors = ov.mentors || [];
 
   const decide = async (a: any, status: string) => {
     try {
       await api.decideApplication(a._id, { status });
-      toast("success", status === "shortlisted" ? "Shortlisted." : status === "under_review" ? "Moved to review." : "Rejected.");
+      const label = status === "shortlisted" ? "Shortlisted." : status === "under_review" ? "Moved to review." : status === "accepted" ? "Accepted." : "Rejected.";
+      toast("success", label);
       reload();
     } catch { toast("error", "Could not update."); }
   };
@@ -262,7 +306,7 @@ function Applications({ ov, reload }: any) {
   return (
     <div className="space-y-4">
       <div className="flex gap-2 flex-wrap">
-        {(["", "applied", "under_review", "shortlisted", "selected", "rejected"] as const).map((s) => (
+        {(["", "applied", "under_review", "shortlisted", "accepted", "selected", "rejected"] as const).map((s) => (
           <button key={s} onClick={() => setFilter(s)}
             className={`px-4 py-2 rounded-full text-sm font-bold transition ${filter === s ? "bg-[#14141a] dark:bg-cream text-white dark:text-[#14141a]" : "bg-white dark:bg-card border border-slate-200 dark:border-white/10 text-slate-600 dark:text-cream-dim"}`}>
             {s === "" ? "All" : (APP_STATUS as any)[s].label}
@@ -277,6 +321,7 @@ function Applications({ ov, reload }: any) {
       </div>
       {shown.map((a: any) => {
         const st = APP_STATUS[a.status] || APP_STATUS.applied;
+        const allocation = (ov.allocations || []).find((item: any) => item.internshipId === a.internshipId && item.studentId === a.studentId);
         return (
           <div key={a._id} className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-5">
             <div className="flex flex-wrap items-start gap-4">
@@ -297,16 +342,42 @@ function Applications({ ov, reload }: any) {
             <div className="flex flex-wrap items-center gap-2 mt-4">
               {a.status === "applied" && <button onClick={() => decide(a, "under_review")} className="btn-hero px-4 py-2 bg-sky-500 text-white text-xs font-cabin">Move to Review</button>}
               {["applied", "under_review"].includes(a.status) && <button onClick={() => decide(a, "shortlisted")} className="btn-hero px-4 py-2 bg-primary text-white text-xs font-cabin">Shortlist</button>}
+              {["applied", "under_review", "shortlisted"].includes(a.status) && <button onClick={() => decide(a, "accepted")} className="btn-hero px-4 py-2 bg-emerald-500 text-white text-xs font-cabin">Accept</button>}
               {["applied", "under_review", "shortlisted"].includes(a.status) && <button onClick={() => decide(a, "rejected")} className="btn-hero px-4 py-2 bg-slate-200 dark:bg-white/15 text-slate-700 dark:text-cream-dim text-xs font-cabin inline-flex items-center gap-1"><XCircle size={13} /> Reject</button>}
-              {a.status === "shortlisted" && (
-                <span className="inline-flex items-center gap-2 ml-auto">
-                  <select id={`m-${a._id}`} defaultValue="" className="field-light px-2.5 py-2 text-xs">
-                    <option value="">✨ Auto-assign mentor</option>
-                    {mentors.map((m: any) => <option key={m._id} value={m._id}>{m.name}</option>)}
-                  </select>
-                  <button onClick={() => { const el = document.getElementById(`m-${a._id}`) as HTMLSelectElement; alloc(a, el?.value || ""); }} className="btn-hero px-4 py-2 bg-emerald-500 text-white text-xs font-cabin inline-flex items-center gap-1"><Check size={13} /> Accept & Onboard</button>
-                </span>
+              {a.status === "accepted" && (
+                <div className="mt-4 w-full rounded-2xl border border-violet-200 dark:border-violet-500/20 bg-violet-50/80 dark:bg-violet-500/5 p-4">
+                  <div className="flex items-center justify-between gap-3 mb-3">
+                    <p className="text-xs font-black uppercase tracking-wide text-violet-700 dark:text-violet-300">Mentor match shortlist</p>
+                    <span className="text-[11px] text-slate-500 dark:text-cream-dim">AI score based on skills and capacity</span>
+                  </div>
+                  <div className="grid gap-3">
+                    {(mentorMatches[a._id] || []).slice(0, 4).map((m: any) => (
+                      <div key={m.mentor._id} className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-xl border border-slate-200 dark:border-white/10 bg-white dark:bg-white/5 p-3">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-slate-900 dark:text-cream">{m.mentor.name}</span>
+                            <Badge tone="purple">{m.score}% match</Badge>
+                          </div>
+                          <p className="text-xs text-slate-500 dark:text-cream-dim mt-1">{m.mentor.expertise?.slice(0, 3).join(" · ") || "Mentor"} · {m.mentor.experience || "Experience pending"}</p>
+                          <p className="text-xs text-slate-500 dark:text-cream-dim mt-1 line-clamp-2">{m.mentor.bio || "Mentor profile is available for guidance and review."}</p>
+                          <div className="flex flex-wrap gap-1.5 mt-2">
+                            {(m.mentor.expertise || []).slice(0, 5).map((skill: string) => (
+                              <span key={skill} className="text-[10px] px-2 py-0.5 rounded-full bg-violet-100 dark:bg-violet-500/15 text-violet-700 dark:text-violet-300 font-semibold">{skill}</span>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button onClick={() => alloc(a, m.mentor._id)} className="btn-hero px-3.5 py-2 bg-emerald-500 text-white text-xs font-cabin inline-flex items-center gap-1"><Check size={13} /> Assign</button>
+                        </div>
+                      </div>
+                    ))}
+                    {(mentorMatches[a._id] || []).length === 0 && (
+                      <p className="text-sm text-slate-500 dark:text-cream-dim">No mentor matches found yet. Please review mentor availability and assign manually.</p>
+                    )}
+                  </div>
+                </div>
               )}
+              {allocation && <button onClick={() => monitor(allocation._id)} className="btn-hero px-4 py-2 bg-sky-500 text-white text-xs font-cabin inline-flex items-center gap-1"><TrendingUp size={13} /> Monitor intern</button>}
               {a.status === "selected" && (
                 <span className="inline-flex items-center gap-2 ml-auto text-xs font-bold text-emerald-600 dark:text-emerald-300">
                   <Check size={14} /> Onboarded
@@ -323,23 +394,46 @@ function Applications({ ov, reload }: any) {
 }
 
 function Monitoring({ ov, go }: any) {
-  const allocs = ov.allocations || [];
+  const [sp] = useSearchParams();
+  const allocs = ov.allocations || ov.interns || [];
   const [sel, setSel] = useState("");
   const [detail, setDetail] = useState<any>(null);
-  const cur = allocs.find((a: any) => a._id === sel) || allocs[0];
+  const requested = sp.get("allocation");
+  const cur = allocs.find((a: any) => a._id === (requested || sel)) || allocs[0];
 
   useEffect(() => {
     if (!cur) return;
     api.allocation(cur._id).then(setDetail).catch(() => setDetail(null));
   }, [cur?._id]);
-  useEffect(() => { if (!sel && allocs[0]) setSel(allocs[0]._id); }, [allocs.length]);
+  useEffect(() => { if (requested && allocs.some((a: any) => a._id === requested)) setSel(requested); else if (!sel && allocs[0]) setSel(allocs[0]._id); }, [allocs.length, requested]);
 
   if (!cur)
-    return <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl"><EmptyState icon={<TrendingUp size={22} />} title="No interns to monitor" body="Onboard applicants and watch their live progress here." /></div>;
+    return (
+      <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-6">
+        <EmptyState icon={<TrendingUp size={22} />} title="No interns to monitor" body="Monitoring starts after you accept an application, choose a mentor, and click Assign from the Applications tab." />
+        <div className="max-w-2xl mx-auto mt-5 grid sm:grid-cols-3 gap-3">
+          {[["1", "Review", "Open Applications and review a student."], ["2", "Assign", "Choose a mentor from the matching shortlist and assign them."], ["3", "Monitor", "The intern will appear here after onboarding." ]].map(([n, title, body]) => (
+            <div key={n} className="rounded-xl bg-slate-50 dark:bg-white/5 border border-slate-100 dark:border-white/5 p-3.5">
+              <span className="w-7 h-7 rounded-full bg-primary text-white grid place-items-center text-xs font-bold">{n}</span>
+              <p className="font-bold text-sm text-slate-900 dark:text-cream mt-2">{title}</p>
+              <p className="text-xs text-slate-500 dark:text-cream-dim mt-1">{body}</p>
+            </div>
+          ))}
+        </div>
+        <button onClick={() => go("applications")} className="btn-hero block mx-auto mt-5 px-5 py-2.5 bg-primary text-white text-sm font-cabin">Open Applications</button>
+      </div>
+    );
 
   const pct = cur.summary?.progress || 0;
   return (
-    <div className="grid lg:grid-cols-[280px_1fr] gap-5">
+    <div className="space-y-4">
+      <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-4">
+        <p className="text-xs font-extrabold uppercase tracking-wide text-slate-500 dark:text-cream-dim mb-3">Select intern to monitor</p>
+        <div className="flex flex-wrap gap-2">
+          {allocs.map((a: any) => <button key={`monitor-${a._id}`} onClick={() => setSel(a._id)} className={`inline-flex items-center gap-2 rounded-xl px-3.5 py-2 text-sm font-bold transition ${cur._id === a._id ? "bg-primary text-white" : "bg-slate-100 dark:bg-white/10 text-slate-700 dark:text-cream-dim hover:bg-violet-100 dark:hover:bg-violet-500/20"}`}><Avatar name={a.student?.name} avatar={a.student?.avatar} color={a.student?.color} size={26} /> Monitor {a.student?.name}</button>)}
+        </div>
+      </div>
+      <div className="grid lg:grid-cols-[280px_1fr] gap-5">
       <div className="bg-white dark:bg-card border border-slate-200 dark:border-white/10 rounded-2xl p-2.5 space-y-1.5 h-fit">
         {allocs.map((a: any) => (
           <button key={a._id} onClick={() => setSel(a._id)}
@@ -349,7 +443,7 @@ function Monitoring({ ov, go }: any) {
               <span className="block font-bold text-sm text-slate-900 dark:text-cream truncate">{a.student?.name}</span>
               <span className="block text-xs text-slate-500 dark:text-cream-dim truncate">{a.internship?.title}</span>
             </span>
-            <span className="text-xs font-bold text-slate-500 dark:text-cream-dim tabular">{a.summary?.progress}%</span>
+            <span className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-bold text-white">Monitor</span>
           </button>
         ))}
       </div>
@@ -407,6 +501,7 @@ function Monitoring({ ov, go }: any) {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }

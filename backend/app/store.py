@@ -66,6 +66,11 @@ class MemoryCollection:
                 return {"deleted": 1}
         return {"deleted": 0}
 
+    def delete_many(self, q=None):
+        before = len(self.docs)
+        self.docs = [d for d in self.docs if not self._match(d, q)]
+        return {"deleted": before - len(self.docs)}
+
     def count_documents(self, q=None):
         return len(self.find(q))
 
@@ -104,6 +109,10 @@ class MongoCollection:
 
     def delete_one(self, q):
         r = self.c.delete_one(q or {})
+        return {"deleted": r.deleted_count}
+
+    def delete_many(self, q=None):
+        r = self.c.delete_many(q or {})
         return {"deleted": r.deleted_count}
 
     def count_documents(self, q=None):
@@ -161,11 +170,39 @@ def _attendance_rows(alloc_id: str, start: date, end: date, absent=(), leave=())
 
 
 def seed_if_empty():
-    from .auth import hash_password                                
+    from .auth import hash_password
 
     users = store.col("users")
-    if users.count_documents({}) > 0:
+    admin_email = (os.getenv("ADMIN_EMAIL") or "admin@demo.internova.app").strip().lower()
+    admin_password = os.getenv("ADMIN_PASSWORD") or "demo1234"
+    admin_name = (os.getenv("ADMIN_NAME") or "Platform Admin").strip() or "Platform Admin"
+    admin_hash = hash_password(admin_password)
+
+    admin = users.find_one({"role": "admin"}) or users.find_one({"email": admin_email})
+    if admin:
+        users.update_one({"_id": admin["_id"]}, {"$set": {
+            "name": admin_name,
+            "email": admin_email,
+            "passwordHash": admin_hash,
+            "role": "admin",
+            "avatar": "AD",
+            "color": "#64748b",
+        }})
         return
+
+    if users.count_documents({}) > 0:
+        users.insert_one({
+            "_id": "u_admin",
+            "name": admin_name,
+            "email": admin_email,
+            "passwordHash": admin_hash,
+            "role": "admin",
+            "avatar": "AD",
+            "color": "#64748b",
+            "createdAt": now_iso(),
+        })
+        return
+
     print("[internova] seeding demo data …", flush=True)
     pw = hash_password("demo1234")
     C = store.col
@@ -215,8 +252,8 @@ def seed_if_empty():
          "experience": "12 years", "organisation": "InterNova Mentor Network",
          "bio": "Former staff engineer. I mentor interns on shipping quality software, not just writing code.",
          "avatar": "KM", "color": "#ec4899", "createdAt": "2026-05-15T10:00:00"},
-        {"_id": "u_admin", "name": "Platform Admin", "email": "admin@demo.internova.app",
-         "passwordHash": pw, "role": "admin", "avatar": "AD", "color": "#64748b",
+        {"_id": "u_admin", "name": admin_name, "email": admin_email,
+         "passwordHash": admin_hash, "role": "admin", "avatar": "AD", "color": "#64748b",
          "createdAt": "2026-05-01T10:00:00"},
     ]:
         users.insert_one(u)
